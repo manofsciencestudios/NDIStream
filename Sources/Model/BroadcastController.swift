@@ -181,14 +181,17 @@ final class BroadcastController: ObservableObject {
                 smoothPacing = false
             }
             NDIRuntime.writeConfigLowestLatency(lowestLatency)
-            DebugLog.write("lowestLatency=\(lowestLatency) ndiInitialized=\(NDIRuntime.isInitialized())")
-            if NDIRuntime.isInitialized() {
-                status = .error("Lowest latency changes after relaunch. Quit and reopen NDIStream before broadcasting.")
-            } else if isBroadcasting {
-                restartSender()
+            let initialized = NDIRuntime.isInitialized()
+            if initialized {
+                lowestLatencyRelaunchRequired = lowestLatency != appliedLowestLatency
+            } else {
+                appliedLowestLatency = lowestLatency
+                lowestLatencyRelaunchRequired = false
             }
+            DebugLog.write("lowestLatency=\(lowestLatency) ndiInitialized=\(initialized) pendingRelaunch=\(lowestLatencyRelaunchRequired)")
         }
     }
+    @Published var lowestLatencyRelaunchRequired: Bool = false
     @Published var isBroadcasting: Bool = false
     @Published var isTransitioning: Bool = false
     @Published var status: Status = .idle
@@ -199,6 +202,7 @@ final class BroadcastController: ObservableObject {
     private let senderLock = NSLock()
     private let frameWatchdog = SenderFrameWatchdog()
     private let frameRepeater = SenderFrameRepeater()
+    private var appliedLowestLatency = false
 
     private func setSender(_ s: NDISender?) {
         senderLock.lock()
@@ -240,6 +244,7 @@ final class BroadcastController: ObservableObject {
 
         let savedLowestLatency = UserDefaults.standard.bool(forKey: "lowestLatency")
         self.lowestLatency = savedLowestLatency
+        self.appliedLowestLatency = savedLowestLatency
         self.smoothPacing = savedLowestLatency ? false : UserDefaults.standard.bool(forKey: "smoothPacing")
         if savedLowestLatency {
             UserDefaults.standard.set(false, forKey: "smoothPacing")

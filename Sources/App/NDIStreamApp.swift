@@ -145,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pixelFormatControl = NSSegmentedControl()
     private var pacingCheckbox = NSButton()
     private var lowestLatencyCheckbox = NSButton()
+    private var lowestLatencyPendingLabel = NSTextField(labelWithString: "Pending relaunch")
     private var senderRecordButton = NSButton()
     private var senderTimerLabel = NSTextField(labelWithString: "00:00")
     private var senderErrorLabel = NSTextField(labelWithString: "")
@@ -290,6 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         lowestLatencyCheckbox = NSButton(checkboxWithTitle: "Lowest latency (unicast UDP, no RUDP; relaunch to apply)", target: self, action: #selector(lowestLatencyChanged))
         content.addArrangedSubview(lowestLatencyCheckbox)
+        lowestLatencyPendingLabel.textColor = .systemOrange
+        lowestLatencyPendingLabel.font = .systemFont(ofSize: 11)
+        lowestLatencyPendingLabel.isHidden = true
+        content.addArrangedSubview(lowestLatencyPendingLabel)
 
         let recordRow = row()
         senderRecordButton = NSButton(title: "REC", target: self, action: #selector(toggleSenderRecording))
@@ -394,6 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
         pacingCheckbox.isEnabled = !senderController.lowestLatency
         lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
+        lowestLatencyPendingLabel.isHidden = !senderController.lowestLatencyRelaunchRequired
         sourceNameField.isEnabled = !senderController.isBroadcasting
         senderRecordButton.isEnabled = senderController.isBroadcasting
         senderRecordButton.title = senderController.recorder.isRecording ? "STOP REC" : "REC"
