@@ -127,6 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let senderController = BroadcastController()
     private let receiverModel = ReceiverModel()
     private var cancellables: Set<AnyCancellable> = []
+    private var statusItem: NSStatusItem!
+    private var statusBroadcastItem: NSMenuItem!
+    private var statusReceiverItem: NSMenuItem!
+    private var statusSenderWindowItem: NSMenuItem!
+    private var statusReceiverWindowItem: NSMenuItem!
+    private var statusHideWindowsItem: NSMenuItem!
+    private var statusLineItem: NSMenuItem!
 
     private var senderWindow: NSWindow!
     private var receiverWindow: NSWindow!
@@ -157,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugLog.write("logPath=\(DebugLog.url.path)")
         NSApp.setActivationPolicy(.regular)
         installMenu()
+        installStatusItem()
         buildSenderWindow()
         buildReceiverWindow()
         bindUpdates()
@@ -170,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
     }
 
     private func installMenu() {
@@ -188,6 +196,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu
+    }
+
+    private func installStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.title = "NDI"
+        statusItem.button?.toolTip = "NDIStream"
+
+        let menu = NSMenu()
+        statusLineItem = NSMenuItem(title: "Idle", action: nil, keyEquivalent: "")
+        statusLineItem.isEnabled = false
+        menu.addItem(statusLineItem)
+        menu.addItem(.separator())
+
+        statusBroadcastItem = NSMenuItem(title: "Start Broadcasting", action: #selector(toggleBroadcastFromStatusItem), keyEquivalent: "")
+        statusBroadcastItem.target = self
+        menu.addItem(statusBroadcastItem)
+
+        statusReceiverItem = NSMenuItem(title: "Connect Receiver", action: #selector(toggleReceiverFromStatusItem), keyEquivalent: "")
+        statusReceiverItem.target = self
+        menu.addItem(statusReceiverItem)
+
+        menu.addItem(.separator())
+        statusSenderWindowItem = NSMenuItem(title: "Show Sender Window", action: #selector(showSenderWindow), keyEquivalent: "")
+        statusSenderWindowItem.target = self
+        menu.addItem(statusSenderWindowItem)
+
+        statusReceiverWindowItem = NSMenuItem(title: "Show Receiver Window", action: #selector(showReceiverWindow), keyEquivalent: "")
+        statusReceiverWindowItem.target = self
+        menu.addItem(statusReceiverWindowItem)
+
+        statusHideWindowsItem = NSMenuItem(title: "Hide Windows", action: #selector(hideWindows), keyEquivalent: "")
+        statusHideWindowsItem.target = self
+        menu.addItem(statusHideWindowsItem)
+
+        menu.addItem(.separator())
+        let logItem = NSMenuItem(title: "Open Debug Log", action: #selector(openLog), keyEquivalent: "")
+        logItem.target = self
+        menu.addItem(logItem)
+
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit NDIStream", action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+        statusItem.menu = menu
+        DebugLog.write("status item installed")
     }
 
     private func buildSenderWindow() {
@@ -341,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         broadcastButton.title = senderController.isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"
         senderStatusLabel.stringValue = senderStatusText
         senderStatusDot.layer?.backgroundColor = senderStatusColor.cgColor
+        updateStatusMenu()
     }
 
     private func updateReceiverUI() {
@@ -352,6 +404,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         receiverRecordButton.title = receiverModel.recorder.isRecording ? "STOP REC" : "REC"
         receiverTimerLabel.stringValue = formatElapsed(receiverModel.recorder.elapsed)
         receiverErrorLabel.stringValue = receiverModel.recorder.lastError ?? ""
+        updateStatusMenu()
+    }
+
+    private func updateStatusMenu() {
+        guard statusItem != nil else { return }
+        statusItem.button?.title = senderController.isBroadcasting || receiverModel.isConnected ? "NDI ●" : "NDI"
+        statusLineItem.title = statusSummary
+        statusBroadcastItem.title = senderController.isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"
+        statusBroadcastItem.isEnabled = !senderController.isTransitioning && !senderController.availableCameras.isEmpty
+        statusReceiverItem.title = receiverModel.isConnected ? "Disconnect Receiver" : "Connect Receiver"
+        statusReceiverItem.isEnabled = receiverModel.isConnected || receiverModel.availableSources.contains(where: { $0.name == receiverModel.selectedSourceName })
+        statusSenderWindowItem.isEnabled = senderWindow != nil
+        statusReceiverWindowItem.isEnabled = receiverWindow != nil
+        statusHideWindowsItem.isEnabled = senderWindow?.isVisible == true || receiverWindow?.isVisible == true
     }
 
     @objc private func previousCamera() { selectCamera(offset: -1) }
@@ -362,15 +428,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pixelFormatChanged() { senderController.pixelFormat = CapturePixelFormat.allCases[max(0, pixelFormatControl.selectedSegment)] }
     @objc private func pacingChanged() { senderController.smoothPacing = pacingCheckbox.state == .on }
     @objc private func toggleBroadcast() { senderController.isBroadcasting ? senderController.stop() : senderController.start() }
+    @objc private func toggleBroadcastFromStatusItem() {
+        toggleBroadcast()
+        DebugLog.write("status item toggle broadcast")
+    }
     @objc private func toggleSenderRecording() { senderController.recorder.isRecording ? senderController.recorder.stop() : senderController.recorder.start() }
     @objc private func revealRecordings() { Recorder.revealRecordingsFolder() }
     @objc private func openLog() { NSWorkspace.shared.open(DebugLog.url) }
-    @objc private func showSenderWindow() { senderWindow?.makeKeyAndOrderFront(nil) }
-    @objc private func showReceiverWindow() { receiverWindow?.makeKeyAndOrderFront(nil) }
+    @objc private func showSenderWindow() {
+        senderWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        updateStatusMenu()
+    }
+    @objc private func showReceiverWindow() {
+        receiverWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        updateStatusMenu()
+    }
+    @objc private func hideWindows() {
+        senderWindow?.orderOut(nil)
+        receiverWindow?.orderOut(nil)
+        DebugLog.write("windows hidden from status item")
+        updateStatusMenu()
+    }
 
     @objc private func previousSource() { selectSource(offset: -1) }
     @objc private func nextSource() { selectSource(offset: 1) }
     @objc private func toggleReceiver() { receiverModel.isConnected ? receiverModel.disconnect() : receiverModel.connect() }
+    @objc private func toggleReceiverFromStatusItem() {
+        toggleReceiver()
+        DebugLog.write("status item toggle receiver")
+    }
     @objc private func toggleReceiverRecording() { receiverModel.recorder.isRecording ? receiverModel.recorder.stop() : receiverModel.recorder.start() }
 
     private func selectCamera(offset: Int) {
@@ -421,6 +509,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return "Broadcasting as '\(senderController.sourceName)' - \(w)x\(h) @ \(fps) fps"
         case .error(let msg): return msg
         }
+    }
+
+    private var statusSummary: String {
+        var parts: [String] = []
+        if senderController.isBroadcasting {
+            parts.append("Sending \(senderController.sourceName)")
+        }
+        if receiverModel.isConnected {
+            parts.append("Receiving")
+        }
+        if parts.isEmpty {
+            return "Idle"
+        }
+        return parts.joined(separator: " / ")
     }
 
     private func makeWindow(title: String, content: NSView, size: NSSize) -> NSWindow {
