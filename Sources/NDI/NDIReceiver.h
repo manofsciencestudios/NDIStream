@@ -14,6 +14,11 @@ NS_ASSUME_NONNULL_BEGIN
 @optional
 - (void)receiverDidStallForSeconds:(NSInteger)seconds;
 - (void)receiverDidResume;
+- (void)receiverDidReceiveAudio:(const float *)samples
+                     sampleRate:(int)sampleRate
+                       channels:(int)channels
+              samplesPerChannel:(int)samplesPerChannel
+             channelStrideBytes:(int)channelStrideBytes;
 @end
 
 @interface NDIReceiver : NSObject

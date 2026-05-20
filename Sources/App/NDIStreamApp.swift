@@ -169,10 +169,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverErrorLabel = NSTextField(labelWithString: "")
     private var receiverSlateField = NSTextField(string: "")
     private var receiverAutoRecordCheckbox = NSButton()
+    private var receiverAudioCheckbox = NSButton()
     private var receiverLockButton = NSButton()
     private var receiverSourcePrevButton = NSButton()
     private var receiverSourceNextButton = NSButton()
     private var receiverFolderButton = NSButton()
+    private var receiverTallyDot = NSView()
+    private var receiverTopBar: NSStackView!
+    private var receiverBottomBar: NSStackView!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.write("applicationDidFinishLaunching")
@@ -372,6 +376,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let topBar = row()
         topBar.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 4, right: 10)
+        receiverTallyDot.wantsLayer = true
+        receiverTallyDot.layer?.cornerRadius = 6
+        receiverTallyDot.widthAnchor.constraint(equalToConstant: 12).isActive = true
+        receiverTallyDot.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        topBar.addArrangedSubview(receiverTallyDot)
         receiverSourcePrevButton = button("‹", action: #selector(previousSource), width: 28)
         receiverSourceNextButton = button("›", action: #selector(nextSource), width: 28)
         topBar.addArrangedSubview(receiverSourcePrevButton)
@@ -405,6 +414,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bottomBar.addArrangedSubview(receiverSlateField)
         receiverAutoRecordCheckbox = NSButton(checkboxWithTitle: "Auto-record", target: self, action: #selector(receiverAutoRecordChanged))
         bottomBar.addArrangedSubview(receiverAutoRecordCheckbox)
+        receiverAudioCheckbox = NSButton(checkboxWithTitle: "Audio", target: self, action: #selector(receiverAudioChanged))
+        bottomBar.addArrangedSubview(receiverAudioCheckbox)
         bottomBar.addArrangedSubview(receiverErrorLabel)
         receiverFolderButton = button("Folder", action: #selector(revealRecordings), width: 64)
         bottomBar.addArrangedSubview(receiverFolderButton)
@@ -416,12 +427,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         display.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
         display.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
 
+        receiverTopBar = topBar
+        receiverBottomBar = bottomBar
         root.addArrangedSubview(topBar)
         root.addArrangedSubview(bottomBar)
         root.addArrangedSubview(display)
         receiverWindow = makeWindow(title: "NDIStream - Receiver", content: root, size: NSSize(width: 820, height: 540))
         receiverWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         receiverWindow.level = .floating
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(receiverDidEnterFullScreen),
+                                               name: NSWindow.didEnterFullScreenNotification,
+                                               object: receiverWindow)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(receiverDidExitFullScreen),
+                                               name: NSWindow.didExitFullScreenNotification,
+                                               object: receiverWindow)
+    }
+
+    @objc private func receiverDidEnterFullScreen() {
+        receiverTopBar?.isHidden = true
+        receiverBottomBar?.isHidden = true
+        DebugLog.write("receiver entered fullscreen — bars hidden")
+    }
+
+    @objc private func receiverDidExitFullScreen() {
+        receiverTopBar?.isHidden = false
+        receiverBottomBar?.isHidden = false
+        DebugLog.write("receiver exited fullscreen — bars shown")
     }
 
     private func bindUpdates() {
@@ -486,6 +519,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             receiverSlateField.stringValue = receiverModel.slate
         }
         receiverAutoRecordCheckbox.state = receiverModel.autoRecord ? .on : .off
+        receiverAudioCheckbox.state = receiverModel.audioEnabled ? .on : .off
+        receiverTallyDot.layer?.backgroundColor = receiverTallyColor.cgColor
+        receiverTallyDot.toolTip = receiverTallyTooltip
 
         let locked = receiverModel.isLocked
         receiverSourcePrevButton.isEnabled = !locked && !receiverModel.isConnected
@@ -493,6 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverConnectButton.isEnabled = !locked && (receiverModel.isConnected || sourceOnline)
         receiverSlateField.isEnabled = !locked
         receiverAutoRecordCheckbox.isEnabled = !locked
+        receiverAudioCheckbox.isEnabled = !locked
         receiverRecordButton.isEnabled = !locked && receiverModel.isConnected
         receiverRecordButton.title = receiverModel.recorder.isRecording ? "STOP REC" : "REC"
         receiverTimerLabel.stringValue = formatElapsed(receiverModel.recorder.elapsed)
@@ -500,6 +537,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverLockButton.title = locked ? "🔒" : "🔓"
         receiverLockButton.toolTip = locked ? "Unlock controls" : "Lock controls (prevents accidental clicks)"
         updateStatusMenu()
+    }
+
+    private var receiverTallyColor: NSColor {
+        switch receiverModel.tally {
+        case .idle: return .systemGray
+        case .waiting: return .systemYellow
+        case .live: return .systemGreen
+        case .reconnecting: return .systemOrange
+        }
+    }
+
+    private var receiverTallyTooltip: String {
+        switch receiverModel.tally {
+        case .idle: return "Idle"
+        case .waiting: return "Connecting…"
+        case .live: return "Receiving"
+        case .reconnecting: return "Reconnecting"
+        }
     }
 
     private func updateStatusMenu() {
@@ -576,6 +631,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func receiverSlateEdited() { receiverModel.slate = receiverSlateField.stringValue }
     @objc private func receiverAutoRecordChanged() { receiverModel.autoRecord = receiverAutoRecordCheckbox.state == .on }
+    @objc private func receiverAudioChanged() {
+        receiverModel.audioEnabled = receiverAudioCheckbox.state == .on
+        DebugLog.write("receiver audio=\(receiverModel.audioEnabled)")
+    }
     @objc private func toggleReceiverLock() {
         receiverModel.isLocked.toggle()
         DebugLog.write("receiver lock=\(receiverModel.isLocked)")

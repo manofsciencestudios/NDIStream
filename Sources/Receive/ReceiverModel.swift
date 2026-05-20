@@ -6,16 +6,25 @@ import Foundation
 
 @MainActor
 final class ReceiverModel: NSObject, ObservableObject {
+    enum Tally: Equatable { case idle, waiting, live, reconnecting }
+
     @Published var availableSources: [NDIFoundSource] = []
     @Published var selectedSourceName: String = ""
     @Published var isConnected: Bool = false
     @Published var statusLine: String = "No source selected"
     @Published var lastFormat: FrameFormat? = nil
+    @Published var tally: Tally = .idle
     @Published var slate: String = "" {
         didSet { UserDefaults.standard.set(slate, forKey: "receiverSlate") }
     }
     @Published var autoRecord: Bool = false {
         didSet { UserDefaults.standard.set(autoRecord, forKey: "receiverAutoRecord") }
+    }
+    @Published var audioEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(audioEnabled, forKey: "receiverAudioEnabled")
+            audioPlayer.setMuted(!audioEnabled)
+        }
     }
     @Published var isLocked: Bool = false
 
@@ -28,6 +37,7 @@ final class ReceiverModel: NSObject, ObservableObject {
 
     let displayLayer = AVSampleBufferDisplayLayer()
     nonisolated let recorder = Recorder(filenamePrefix: "Receiver")
+    nonisolated let audioPlayer = AudioPlayer()
 
     private let finder: NDIFinder?
     private var receiver: NDIReceiver?
@@ -46,6 +56,8 @@ final class ReceiverModel: NSObject, ObservableObject {
         }
         self.slate = UserDefaults.standard.string(forKey: "receiverSlate") ?? ""
         self.autoRecord = UserDefaults.standard.bool(forKey: "receiverAutoRecord")
+        self.audioEnabled = UserDefaults.standard.bool(forKey: "receiverAudioEnabled")
+        audioPlayer.setMuted(!audioEnabled)
 
         finder?.onSourcesChanged = { [weak self] sources in
             guard let self else { return }
@@ -88,6 +100,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         r.delegate = self
         receiver = r
         isConnected = true
+        tally = .waiting
         ActivityKeeper.begin("receiver")
         statusLine = "Connecting to \(name)…"
         lastFormat = nil
@@ -107,6 +120,8 @@ final class ReceiverModel: NSObject, ObservableObject {
         receiver?.stop()
         receiver = nil
         isConnected = false
+        tally = .idle
+        audioPlayer.stop()
         ActivityKeeper.end("receiver")
         displayLayer.flushAndRemoveImage()
         statusLine = "Disconnected"
@@ -147,6 +162,7 @@ extension ReceiverModel: NDIReceiverDelegate {
         Task { @MainActor in
             guard self.isConnected else { return }
             self.statusLine = "Reconnecting (\(seconds)s)…"
+            self.tally = .reconnecting
         }
     }
 
@@ -154,7 +170,20 @@ extension ReceiverModel: NDIReceiverDelegate {
         Task { @MainActor in
             guard self.isConnected else { return }
             self.statusLine = "Reconnected"
+            self.tally = .live
         }
+    }
+
+    nonisolated func receiverDidReceiveAudio(_ samples: UnsafePointer<Float>,
+                                              sampleRate: Int32,
+                                              channels: Int32,
+                                              samplesPerChannel: Int32,
+                                              channelStrideBytes: Int32) {
+        audioPlayer.schedule(samples: samples,
+                             sampleRate: sampleRate,
+                             channels: channels,
+                             samplesPerChannel: samplesPerChannel,
+                             channelStrideBytes: channelStrideBytes)
     }
 
     private func enqueueSampleBuffer(_ sb: CMSampleBuffer,
@@ -185,6 +214,7 @@ extension ReceiverModel: NDIReceiverDelegate {
         if receivedFrameCount == 1 || receivedFrameCount % 60 == 0 {
             DebugLog.write("receiver frame \(receivedFrameCount) \(width)x\(height) fps=\(fps) fourCC=\(fourCCStr) displayStatus=\(displayLayer.status.rawValue)")
         }
+        if tally != .live { tally = .live }
         if lastFormat != fmt {
             lastFormat = fmt
             statusLine = "\(width)×\(height) @ \(fps) • \(fourCCStr)"
@@ -199,6 +229,8 @@ extension ReceiverModel: NDIReceiverDelegate {
         receiver?.stop()
         receiver = nil
         isConnected = false
+        tally = .idle
+        audioPlayer.stop()
         ActivityKeeper.end("receiver")
         displayLayer.flushAndRemoveImage()
         statusLine = "Source offline"

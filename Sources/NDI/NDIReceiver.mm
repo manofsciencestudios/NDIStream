@@ -90,17 +90,34 @@ static void NDIReceiverDebugLog(NSString *message) {
     NDIReceiverDebugLog(@"captureLoop start");
     while (!_stopFlag.load()) {
         NDIlib_video_frame_v2_t video;
+        NDIlib_audio_frame_v3_t audio;
         memset(&video, 0, sizeof(video));
+        memset(&audio, 0, sizeof(audio));
 
-        NDIlib_frame_type_e type = NDIlib_recv_capture_v3(_recv, &video, NULL, NULL, 1000);
+        NDIlib_frame_type_e type = NDIlib_recv_capture_v3(_recv, &video, &audio, NULL, 1000);
         if (_stopFlag.load()) {
             if (type == NDIlib_frame_type_video) {
                 NDIlib_recv_free_video_v2(_recv, &video);
+            }
+            if (type == NDIlib_frame_type_audio) {
+                NDIlib_recv_free_audio_v3(_recv, &audio);
             }
             break;
         }
 
         switch (type) {
+            case NDIlib_frame_type_audio: {
+                id<NDIReceiverDelegate> d = self.delegate;
+                if (d && [d respondsToSelector:@selector(receiverDidReceiveAudio:sampleRate:channels:samplesPerChannel:channelStrideBytes:)]) {
+                    [d receiverDidReceiveAudio:(const float *)audio.p_data
+                                    sampleRate:audio.sample_rate
+                                      channels:audio.no_channels
+                             samplesPerChannel:audio.no_samples
+                            channelStrideBytes:audio.channel_stride_in_bytes];
+                }
+                NDIlib_recv_free_audio_v3(_recv, &audio);
+                break;
+            }
             case NDIlib_frame_type_video: {
                 if (consecutiveNoneCount > 0) {
                     NDIReceiverDebugLog([NSString stringWithFormat:@"video resumed after %d empty polls", consecutiveNoneCount]);
