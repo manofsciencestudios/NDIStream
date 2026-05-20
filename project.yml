@@ -1,0 +1,63 @@
+name: NDIStream
+options:
+  bundleIdPrefix: com.mike.ndistream
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: "YES"
+    CODE_SIGNING_ALLOWED: "YES"
+    ENABLE_HARDENED_RUNTIME: "YES"
+targets:
+  NDIStream:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
+    info:
+      path: Resources/Info.plist
+      properties:
+        NSCameraUsageDescription: "NDIStream needs camera access to broadcast video over NDI."
+        NSHighResolutionCapable: true
+        LSMinimumSystemVersion: "13.0"
+        CFBundleName: NDIStream
+        CFBundleDisplayName: NDIStream
+        CFBundleIconFile: AppIcon
+        LSApplicationCategoryType: public.app-category.video
+    entitlements:
+      path: NDIStream.entitlements
+      properties:
+        com.apple.security.device.camera: true
+        com.apple.security.cs.disable-library-validation: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mike.ndistream.NDIStream
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/NDI/NDIStream-Bridging-Header.h
+        HEADER_SEARCH_PATHS: '"/Library/NDI SDK for Apple/include"'
+        LIBRARY_SEARCH_PATHS: '"/Library/NDI SDK for Apple/lib/macOS"'
+        OTHER_LDFLAGS: -lndi
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        CLANG_ENABLE_OBJC_ARC: "YES"
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        CLANG_CXX_LIBRARY: "libc++"
+    postBuildScripts:
+      - name: Embed libndi.dylib and re-sign
+        shell: /bin/bash
+        script: |
+          set -e
+          SRC="/Library/NDI SDK for Apple/lib/macOS/libndi.dylib"
+          DST_DIR="${CODESIGNING_FOLDER_PATH}/Contents/Frameworks"
+          DST="${DST_DIR}/libndi.dylib"
+          mkdir -p "${DST_DIR}"
+          cp -f "${SRC}" "${DST}"
+          chmod u+w "${DST}"
+          install_name_tool -id @rpath/libndi.dylib "${DST}" || true
+          codesign --force --sign - "${DST}"
