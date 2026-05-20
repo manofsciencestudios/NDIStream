@@ -30,6 +30,8 @@ targets:
         LSMinimumSystemVersion: "13.0"
         CFBundleName: NDIStream
         CFBundleDisplayName: NDIStream
+        CFBundleShortVersionString: "1.0.1"
+        CFBundleVersion: "2"
         CFBundleIconFile: AppIcon
         LSApplicationCategoryType: public.app-category.video
     entitlements:
