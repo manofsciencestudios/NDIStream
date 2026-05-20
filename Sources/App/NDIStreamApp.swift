@@ -217,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         content.addArrangedSubview(statusRow)
 
         senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 700))
+        senderWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
     private func buildReceiverWindow() {
@@ -255,6 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         root.addArrangedSubview(toolbar)
         root.addArrangedSubview(display)
         receiverWindow = makeWindow(title: "NDIStream - Receiver", content: root, size: NSSize(width: 800, height: 500))
+        receiverWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        receiverWindow.level = .floating
     }
 
     private func bindUpdates() {
