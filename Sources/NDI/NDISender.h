@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
+#import <CoreMedia/CoreMedia.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -14,6 +15,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)repeatLastFrameWithFrameRateN:(int32_t)frameRateN
                             frameRateD:(int32_t)frameRateD;
+
+- (void)sendAudioSampleBuffer:(CMSampleBufferRef)sampleBuffer NS_SWIFT_NAME(sendAudio(_:));
 
 - (void)stop;
 

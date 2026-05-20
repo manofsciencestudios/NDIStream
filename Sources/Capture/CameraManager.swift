@@ -42,19 +42,29 @@ enum CapturePixelFormat: String, CaseIterable, Identifiable {
     }
 }
 
-final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
     private let queue = DispatchQueue(label: "NDIStream.CameraManager.SampleQueue", qos: .userInteractive)
+    private let audioQueue = DispatchQueue(label: "NDIStream.CameraManager.AudioQueue", qos: .userInteractive)
     private var currentInput: AVCaptureDeviceInput?
     private var currentDevice: AVCaptureDevice?
+    private var currentAudioInput: AVCaptureDeviceInput?
+    private var currentAudioDevice: AVCaptureDevice?
     private var frameCount = 0
+    private var audioFrameCount = 0
     private var requestedPixelFormat: CapturePixelFormat = .bgra
 
     private let onFrameLock = OSAllocatedUnfairLock<((CVPixelBuffer, CMTime) -> Void)?>(initialState: nil)
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)? {
         get { onFrameLock.withLock { $0 } }
         set { onFrameLock.withLock { $0 = newValue } }
+    }
+    private let onAudioLock = OSAllocatedUnfairLock<((CMSampleBuffer) -> Void)?>(initialState: nil)
+    var onAudioSampleBuffer: ((CMSampleBuffer) -> Void)? {
+        get { onAudioLock.withLock { $0 } }
+        set { onAudioLock.withLock { $0 = newValue } }
     }
 
     override init() {
@@ -66,11 +76,25 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         applyOutputPixelFormat(.bgra)
         output.alwaysDiscardsLateVideoFrames = true
         output.setSampleBufferDelegate(self, queue: queue)
+        audioOutput.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
         if session.canAddOutput(output) {
             session.addOutput(output)
             DebugLog.write("video output added settings=\(String(describing: output.videoSettings))")
         } else {
             DebugLog.write("ERROR cannot add AVCaptureVideoDataOutput")
+        }
+        if session.canAddOutput(audioOutput) {
+            session.addOutput(audioOutput)
+            DebugLog.write("audio output added settings=\(String(describing: audioOutput.audioSettings))")
+        } else {
+            DebugLog.write("WARN cannot add AVCaptureAudioDataOutput")
         }
         session.commitConfiguration()
         NotificationCenter.default.addObserver(self,
@@ -103,6 +127,26 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         DebugLog.write("availableDevices count=\(devices.count) types=\(types.map { $0.rawValue }.joined(separator: ","))")
         for dev in devices {
             DebugLog.write("device name=\(dev.localizedName) id=\(dev.uniqueID) model=\(dev.modelID) connected=\(dev.isConnected) suspended=\(dev.isSuspended)")
+        }
+        return devices
+    }
+
+    static func availableAudioDevices() -> [AVCaptureDevice] {
+        let types: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) {
+            types = [.microphone, .external]
+        } else {
+            types = [.builtInMicrophone, .externalUnknown]
+        }
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: types,
+            mediaType: .audio,
+            position: .unspecified
+        )
+        let devices = session.devices
+        DebugLog.write("availableAudioDevices count=\(devices.count)")
+        for dev in devices {
+            DebugLog.write("audio device name=\(dev.localizedName) id=\(dev.uniqueID) model=\(dev.modelID) connected=\(dev.isConnected) suspended=\(dev.isSuspended)")
         }
         return devices
     }
@@ -168,6 +212,32 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         session.commitConfiguration()
     }
 
+    func configureAudio(device: AVCaptureDevice?) throws {
+        DebugLog.write("configureAudio device=\(device?.localizedName ?? "none")")
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        if let currentAudioInput {
+            session.removeInput(currentAudioInput)
+            self.currentAudioInput = nil
+            self.currentAudioDevice = nil
+        }
+
+        guard let device else { return }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        if session.canAddInput(input) {
+            session.addInput(input)
+            currentAudioInput = input
+            currentAudioDevice = device
+            DebugLog.write("audio input added for \(device.localizedName)")
+        } else {
+            DebugLog.write("ERROR cannot add audio input for \(device.localizedName)")
+            throw NSError(domain: "NDIStream.CameraManager", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Cannot add audio input for selected microphone."])
+        }
+    }
+
     private func applyOutputPixelFormat(_ pixelFormat: CapturePixelFormat) {
         requestedPixelFormat = pixelFormat
         let chosen = pixelFormat.cvPixelFormat
@@ -221,9 +291,34 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         }
     }
 
+    static func requestAudioAccess() async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        DebugLog.write("audio authorization status before=\(status.rawValue)")
+        switch status {
+        case .authorized:
+            return true
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            DebugLog.write("audio authorization prompt result granted=\(granted)")
+            return granted
+        default:
+            DebugLog.write("audio authorization denied/restricted status=\(status.rawValue)")
+            return false
+        }
+    }
+
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        if output is AVCaptureAudioDataOutput {
+            audioFrameCount += 1
+            if audioFrameCount == 1 || audioFrameCount % 120 == 0 {
+                DebugLog.write("audio frame \(audioFrameCount) samples=\(CMSampleBufferGetNumSamples(sampleBuffer)) pts=\(CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)")
+            }
+            onAudioSampleBuffer?(sampleBuffer)
+            return
+        }
+
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         frameCount += 1
         if frameCount == 1 || frameCount % 60 == 0 {

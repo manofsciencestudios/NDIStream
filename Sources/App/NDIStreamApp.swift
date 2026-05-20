@@ -154,6 +154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var senderLockButton = NSButton()
     private var senderCameraPrevButton = NSButton()
     private var senderCameraNextButton = NSButton()
+    private var senderAudioPrevButton = NSButton()
+    private var senderAudioNextButton = NSButton()
+    private var senderAudioLabel = NSTextField(labelWithString: "")
+    private var senderAudioCheckbox = NSButton()
     private var senderFolderButton = NSButton()
     private var senderLogButton = NSButton()
     private var logPathLabel = NSTextField(labelWithString: "")
@@ -283,6 +287,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cameraRow.addArrangedSubview(senderCameraNextButton)
         content.addArrangedSubview(cameraRow)
 
+        content.addArrangedSubview(sectionLabel("Microphone"))
+        let audioRow = row()
+        senderAudioPrevButton = button("‹", action: #selector(previousAudioDevice), width: 32)
+        senderAudioNextButton = button("›", action: #selector(nextAudioDevice), width: 32)
+        audioRow.addArrangedSubview(senderAudioPrevButton)
+        senderAudioLabel.lineBreakMode = .byTruncatingMiddle
+        senderAudioLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        audioRow.addArrangedSubview(senderAudioLabel)
+        audioRow.addArrangedSubview(senderAudioNextButton)
+        content.addArrangedSubview(audioRow)
+
+        senderAudioCheckbox = NSButton(checkboxWithTitle: "Send microphone audio over NDI", target: self, action: #selector(senderAudioChanged))
+        content.addArrangedSubview(senderAudioCheckbox)
+
         content.addArrangedSubview(sectionLabel("NDI source name"))
         sourceNameField.target = self
         sourceNameField.action = #selector(sourceNameEdited)
@@ -365,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusRow.addArrangedSubview(senderStatusLabel)
         content.addArrangedSubview(statusRow)
 
-        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 820))
+        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 880))
         senderWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
@@ -481,6 +499,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         qualityControl.selectedSegment = QualityPreset.allCases.firstIndex(of: senderController.quality) ?? 0
         fpsControl.selectedSegment = senderController.targetFPS == 60 ? 1 : 0
         pixelFormatControl.selectedSegment = CapturePixelFormat.allCases.firstIndex(of: senderController.pixelFormat) ?? 0
+        senderAudioLabel.stringValue = selectedAudioDeviceName
+        senderAudioCheckbox.state = senderController.audioEnabled ? .on : .off
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
         lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
         lowestLatencyPendingLabel.isHidden = !senderController.lowestLatencyRelaunchRequired
@@ -489,6 +509,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let locked = senderController.isLocked
         senderCameraPrevButton.isEnabled = !locked
         senderCameraNextButton.isEnabled = !locked
+        senderAudioPrevButton.isEnabled = !locked && !senderController.isBroadcasting && senderController.availableAudioDevices.count > 1
+        senderAudioNextButton.isEnabled = !locked && !senderController.isBroadcasting && senderController.availableAudioDevices.count > 1
+        senderAudioCheckbox.isEnabled = !locked && !senderController.isBroadcasting && !senderController.availableAudioDevices.isEmpty
         sourceNameField.isEnabled = !locked && !senderController.isBroadcasting
         senderSlateField.isEnabled = !locked
         qualityControl.isEnabled = !locked
@@ -572,6 +595,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func previousCamera() { selectCamera(offset: -1) }
     @objc private func nextCamera() { selectCamera(offset: 1) }
+    @objc private func previousAudioDevice() { selectAudioDevice(offset: -1) }
+    @objc private func nextAudioDevice() { selectAudioDevice(offset: 1) }
     @objc private func sourceNameEdited() { senderController.sourceName = sourceNameField.stringValue }
     @objc private func qualityChanged() { senderController.quality = QualityPreset.allCases[max(0, qualityControl.selectedSegment)] }
     @objc private func fpsChanged() { senderController.targetFPS = fpsControl.selectedSegment == 1 ? 60 : 30 }
@@ -592,6 +617,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func senderSlateEdited() { senderController.slate = senderSlateField.stringValue }
     @objc private func senderAutoRecordChanged() { senderController.autoRecord = senderAutoRecordCheckbox.state == .on }
+    @objc private func senderAudioChanged() {
+        senderController.audioEnabled = senderAudioCheckbox.state == .on
+        DebugLog.write("sender audio=\(senderController.audioEnabled)")
+    }
     @objc private func toggleSenderLock() {
         senderController.isLocked.toggle()
         DebugLog.write("sender lock=\(senderController.isLocked)")
@@ -648,6 +677,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         senderController.selectedCameraID = cameras[next].uniqueID
     }
 
+    private func selectAudioDevice(offset: Int) {
+        let devices = senderController.availableAudioDevices
+        guard devices.count > 1, !senderController.isBroadcasting else { return }
+        let current = devices.firstIndex { $0.uniqueID == senderController.selectedAudioDeviceID } ?? 0
+        let next = (current + offset + devices.count) % devices.count
+        senderController.selectedAudioDeviceID = devices[next].uniqueID
+    }
+
     private func selectSource(offset: Int) {
         let sources = receiverModel.availableSources
         guard sources.count > 1, !receiverModel.isConnected else { return }
@@ -659,6 +696,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var selectedCameraName: String {
         if senderController.availableCameras.isEmpty { return "No cameras found" }
         return senderController.currentDevice()?.localizedName ?? senderController.availableCameras.first?.localizedName ?? "Camera unavailable"
+    }
+
+    private var selectedAudioDeviceName: String {
+        if senderController.availableAudioDevices.isEmpty { return "No microphones found" }
+        return senderController.currentAudioDevice()?.localizedName ?? senderController.availableAudioDevices.first?.localizedName ?? "Microphone unavailable"
     }
 
     private var selectedSourceLabel: String {

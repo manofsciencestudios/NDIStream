@@ -128,6 +128,7 @@ final class BroadcastController: ObservableObject {
     }
 
     @Published var availableCameras: [AVCaptureDevice] = []
+    @Published var availableAudioDevices: [AVCaptureDevice] = []
     @Published var selectedCameraID: String {
         didSet {
             UserDefaults.standard.set(selectedCameraID, forKey: "lastCameraID")
@@ -135,6 +136,16 @@ final class BroadcastController: ObservableObject {
                 do { try cameraManager.switchToDevice(dev, quality: quality, fps: targetFPS, pixelFormat: pixelFormat) }
                 catch { status = .error(error.localizedDescription) }
             }
+        }
+    }
+    @Published var selectedAudioDeviceID: String {
+        didSet {
+            UserDefaults.standard.set(selectedAudioDeviceID, forKey: "lastAudioDeviceID")
+        }
+    }
+    @Published var audioEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(audioEnabled, forKey: "senderAudioEnabled")
         }
     }
     @Published var sourceName: String {
@@ -228,6 +239,8 @@ final class BroadcastController: ObservableObject {
         DebugLog.write("BroadcastController.init")
         let cameras = CameraManager.availableDevices()
         self.availableCameras = cameras
+        let audioDevices = CameraManager.availableAudioDevices()
+        self.availableAudioDevices = audioDevices
 
         let saved = UserDefaults.standard.string(forKey: "lastCameraID")
         if let saved, cameras.contains(where: { $0.uniqueID == saved }) {
@@ -237,6 +250,14 @@ final class BroadcastController: ObservableObject {
         } else {
             self.selectedCameraID = cameras.first?.uniqueID ?? ""
         }
+
+        let savedAudio = UserDefaults.standard.string(forKey: "lastAudioDeviceID")
+        if let savedAudio, audioDevices.contains(where: { $0.uniqueID == savedAudio }) {
+            self.selectedAudioDeviceID = savedAudio
+        } else {
+            self.selectedAudioDeviceID = audioDevices.first?.uniqueID ?? ""
+        }
+        self.audioEnabled = UserDefaults.standard.bool(forKey: "senderAudioEnabled")
 
         self.sourceName = UserDefaults.standard.string(forKey: "lastSourceName") ?? "Mac Camera"
 
@@ -259,16 +280,27 @@ final class BroadcastController: ObservableObject {
         self.slate = UserDefaults.standard.string(forKey: "senderSlate") ?? ""
         self.autoRecord = UserDefaults.standard.bool(forKey: "senderAutoRecord")
         cameraManager.setPixelFormat(pixelFormat)
-        DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
+        DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) selectedAudioDeviceID=\(selectedAudioDeviceID) audioEnabled=\(audioEnabled) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
     }
 
     func currentDevice() -> AVCaptureDevice? {
         availableCameras.first(where: { $0.uniqueID == selectedCameraID })
     }
 
+    func currentAudioDevice() -> AVCaptureDevice? {
+        availableAudioDevices.first(where: { $0.uniqueID == selectedAudioDeviceID })
+    }
+
     func refreshCameras() {
         availableCameras = CameraManager.availableDevices()
-        DebugLog.write("refreshCameras count=\(availableCameras.count) selected=\(selectedCameraID)")
+        if !availableCameras.contains(where: { $0.uniqueID == selectedCameraID }) {
+            selectedCameraID = availableCameras.first?.uniqueID ?? ""
+        }
+        availableAudioDevices = CameraManager.availableAudioDevices()
+        if !availableAudioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceID }) {
+            selectedAudioDeviceID = availableAudioDevices.first?.uniqueID ?? ""
+        }
+        DebugLog.write("refreshCameras count=\(availableCameras.count) selected=\(selectedCameraID) audioCount=\(availableAudioDevices.count) selectedAudio=\(selectedAudioDeviceID)")
     }
 
     func start() {
@@ -291,8 +323,26 @@ final class BroadcastController: ObservableObject {
                 return
             }
 
+            let audioDevice = self.audioEnabled ? self.currentAudioDevice() : nil
+            if self.audioEnabled {
+                let audioGranted = await CameraManager.requestAudioAccess()
+                guard audioGranted else {
+                    DebugLog.write("ERROR microphone permission denied")
+                    self.status = .error("Microphone permission denied. Enable in System Settings → Privacy & Security → Microphone.")
+                    self.isTransitioning = false
+                    return
+                }
+                guard audioDevice != nil else {
+                    DebugLog.write("ERROR audio enabled but no microphone selected")
+                    self.status = .error("No microphone selected.")
+                    self.isTransitioning = false
+                    return
+                }
+            }
+
             do {
                 try self.cameraManager.switchToDevice(device, quality: self.quality, fps: self.targetFPS, pixelFormat: self.pixelFormat)
+                try self.cameraManager.configureAudio(device: audioDevice)
             } catch {
                 DebugLog.write("ERROR switchToDevice failed \(error.localizedDescription)")
                 self.status = .error(error.localizedDescription)
@@ -308,6 +358,15 @@ final class BroadcastController: ObservableObject {
             }
             DebugLog.write("NDISender created sourceName=\(self.sourceName) clockVideo=\(self.smoothPacing)")
             self.setSender(s)
+            if self.audioEnabled {
+                self.cameraManager.onAudioSampleBuffer = { [weak self] sampleBuffer in
+                    self?.currentSender()?.sendAudio(sampleBuffer)
+                }
+                DebugLog.write("sender audio enabled device=\(audioDevice?.localizedName ?? "unknown")")
+            } else {
+                self.cameraManager.onAudioSampleBuffer = nil
+                DebugLog.write("sender audio disabled")
+            }
 
             let fpsN = Int32(self.targetFPS * 1000)
             let fpsD: Int32 = 1000
@@ -359,6 +418,7 @@ final class BroadcastController: ObservableObject {
         if recorder.isRecording { recorder.stop() }
         frameRepeater.stop()
         frameWatchdog.stop()
+        cameraManager.onAudioSampleBuffer = nil
         cameraManager.onFrame = nil
         cameraManager.stop()
         let outgoing = currentSender()
