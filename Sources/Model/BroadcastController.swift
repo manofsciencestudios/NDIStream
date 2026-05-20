@@ -3,6 +3,55 @@ import Combine
 import CoreVideo
 import Foundation
 
+private final class SenderFrameWatchdog {
+    private let queue = DispatchQueue(label: "NDIStream.SenderFrameWatchdog", qos: .userInteractive)
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var lastFrameAt = Date()
+    private var stallCount = 0
+
+    func start(onStall: @escaping (Int, TimeInterval) -> Void) {
+        stop()
+        lock.lock()
+        lastFrameAt = Date()
+        stallCount = 0
+        lock.unlock()
+
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 3, repeating: 1)
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let elapsed = Date().timeIntervalSince(self.lastFrameAt)
+            if elapsed >= 3.0 {
+                self.stallCount += 1
+                let count = self.stallCount
+                self.lastFrameAt = Date()
+                self.lock.unlock()
+                DebugLog.write("WARN sender frame watchdog stall count=\(count) elapsed=\(String(format: "%.2f", elapsed))")
+                onStall(count, elapsed)
+            } else {
+                self.lock.unlock()
+            }
+        }
+        timer = t
+        t.resume()
+        DebugLog.write("sender frame watchdog start")
+    }
+
+    func markFrame() {
+        lock.lock()
+        lastFrameAt = Date()
+        lock.unlock()
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+        DebugLog.write("sender frame watchdog stop")
+    }
+}
+
 @MainActor
 final class BroadcastController: ObservableObject {
     enum Status: Equatable {
@@ -62,6 +111,7 @@ final class BroadcastController: ObservableObject {
     let recorder = Recorder(filenamePrefix: "Sender")
     private var sender: NDISender?
     private let senderLock = NSLock()
+    private let frameWatchdog = SenderFrameWatchdog()
 
     private func setSender(_ s: NDISender?) {
         senderLock.lock()
@@ -156,9 +206,11 @@ final class BroadcastController: ObservableObject {
             let fpsN = Int32(self.targetFPS * 1000)
             let fpsD: Int32 = 1000
             let rec = self.recorder
+            let watchdog = self.frameWatchdog
             var sentFrameCount = 0
             self.cameraManager.onFrame = { [weak self] pb, pts in
                 guard let self else { return }
+                watchdog.markFrame()
                 if let snd = self.currentSender() {
                     sentFrameCount += 1
                     if sentFrameCount == 1 || sentFrameCount % 60 == 0 {
@@ -172,6 +224,10 @@ final class BroadcastController: ObservableObject {
                 rec.append(pixelBuffer: pb, pts: pts)
             }
 
+            let manager = self.cameraManager
+            self.frameWatchdog.start { count, elapsed in
+                manager.restartSession(reason: "sender watchdog stall \(count), elapsed \(String(format: "%.2f", elapsed))s")
+            }
             self.cameraManager.start()
             self.isBroadcasting = true
             ActivityKeeper.begin("broadcast")
@@ -186,6 +242,7 @@ final class BroadcastController: ObservableObject {
         guard isBroadcasting, !isTransitioning else { return }
         isTransitioning = true
         if recorder.isRecording { recorder.stop() }
+        frameWatchdog.stop()
         cameraManager.onFrame = nil
         cameraManager.stop()
         let outgoing = currentSender()
