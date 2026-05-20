@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import os
 
 enum QualityPreset: String, CaseIterable, Identifiable {
     case native, p720, p540
@@ -50,7 +51,11 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private var frameCount = 0
     private var requestedPixelFormat: CapturePixelFormat = .bgra
 
-    var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    private let onFrameLock = OSAllocatedUnfairLock<((CVPixelBuffer, CMTime) -> Void)?>(initialState: nil)
+    var onFrame: ((CVPixelBuffer, CMTime) -> Void)? {
+        get { onFrameLock.withLock { $0 } }
+        set { onFrameLock.withLock { $0 = newValue } }
+    }
 
     override init() {
         super.init()
@@ -186,19 +191,6 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             } else {
                 DebugLog.write("session.startRunning skipped already running")
             }
-        }
-    }
-
-    func restartSession(reason: String) {
-        DebugLog.write("CameraManager.restartSession requested reason=\(reason)")
-        queue.async { [session] in
-            DebugLog.write("session restart begin isRunning=\(session.isRunning) inputs=\(session.inputs.count) outputs=\(session.outputs.count)")
-            if session.isRunning {
-                session.stopRunning()
-                DebugLog.write("session restart stopped isRunning=\(session.isRunning)")
-            }
-            session.startRunning()
-            DebugLog.write("session restart started isRunning=\(session.isRunning)")
         }
     }
 

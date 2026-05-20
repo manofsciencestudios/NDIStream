@@ -170,6 +170,14 @@ final class BroadcastController: ObservableObject {
             if isBroadcasting { restartSender() }
         }
     }
+    @Published var lowestLatency: Bool {
+        didSet {
+            UserDefaults.standard.set(lowestLatency, forKey: "lowestLatency")
+            NDIRuntime.writeConfigLowestLatency(lowestLatency)
+            DebugLog.write("lowestLatency=\(lowestLatency)")
+            if isBroadcasting { restartSender() }
+        }
+    }
     @Published var isBroadcasting: Bool = false
     @Published var isTransitioning: Bool = false
     @Published var status: Status = .idle
@@ -220,8 +228,9 @@ final class BroadcastController: ObservableObject {
         self.pixelFormat = savedPixelFormat ?? .bgra
 
         self.smoothPacing = UserDefaults.standard.bool(forKey: "smoothPacing")
+        self.lowestLatency = UserDefaults.standard.bool(forKey: "lowestLatency")
         cameraManager.setPixelFormat(pixelFormat)
-        DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing)")
+        DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
     }
 
     func currentDevice() -> AVCaptureDevice? {

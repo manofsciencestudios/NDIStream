@@ -123,7 +123,7 @@ enum ActivityKeeper {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let senderController = BroadcastController()
     private let receiverModel = ReceiverModel()
     private var cancellables: Set<AnyCancellable> = []
@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fpsControl = NSSegmentedControl()
     private var pixelFormatControl = NSSegmentedControl()
     private var pacingCheckbox = NSButton()
+    private var lowestLatencyCheckbox = NSButton()
     private var senderRecordButton = NSButton()
     private var senderTimerLabel = NSTextField(labelWithString: "00:00")
     private var senderErrorLabel = NSTextField(labelWithString: "")
@@ -237,8 +238,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit NDIStream", action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+        menu.delegate = self
         statusItem.menu = menu
         DebugLog.write("status item installed")
+    }
+
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+        Task { @MainActor in self.updateStatusMenu() }
     }
 
     private func buildSenderWindow() {
@@ -281,6 +287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         pacingCheckbox = NSButton(checkboxWithTitle: "Smooth pacing (+1 frame latency)", target: self, action: #selector(pacingChanged))
         content.addArrangedSubview(pacingCheckbox)
+
+        lowestLatencyCheckbox = NSButton(checkboxWithTitle: "Lowest latency (unicast UDP, no RUDP)", target: self, action: #selector(lowestLatencyChanged))
+        content.addArrangedSubview(lowestLatencyCheckbox)
 
         let recordRow = row()
         senderRecordButton = NSButton(title: "REC", target: self, action: #selector(toggleSenderRecording))
@@ -383,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fpsControl.selectedSegment = senderController.targetFPS == 60 ? 1 : 0
         pixelFormatControl.selectedSegment = CapturePixelFormat.allCases.firstIndex(of: senderController.pixelFormat) ?? 0
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
+        lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
         sourceNameField.isEnabled = !senderController.isBroadcasting
         senderRecordButton.isEnabled = senderController.isBroadcasting
         senderRecordButton.title = senderController.recorder.isRecording ? "STOP REC" : "REC"
@@ -427,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func fpsChanged() { senderController.targetFPS = fpsControl.selectedSegment == 1 ? 60 : 30 }
     @objc private func pixelFormatChanged() { senderController.pixelFormat = CapturePixelFormat.allCases[max(0, pixelFormatControl.selectedSegment)] }
     @objc private func pacingChanged() { senderController.smoothPacing = pacingCheckbox.state == .on }
+    @objc private func lowestLatencyChanged() { senderController.lowestLatency = lowestLatencyCheckbox.state == .on }
     @objc private func toggleBroadcast() { senderController.isBroadcasting ? senderController.stop() : senderController.start() }
     @objc private func toggleBroadcastFromStatusItem() {
         toggleBroadcast()
