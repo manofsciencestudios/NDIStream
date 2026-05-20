@@ -1,20 +1,5 @@
 import AppKit
 import AVFoundation
-import SwiftUI
-
-struct PreviewView: NSViewRepresentable {
-    let session: AVCaptureSession
-
-    func makeNSView(context: Context) -> PreviewNSView {
-        let v = PreviewNSView()
-        v.attach(session: session)
-        return v
-    }
-
-    func updateNSView(_ nsView: PreviewNSView, context: Context) {
-        nsView.attach(session: session)
-    }
-}
 
 final class PreviewNSView: NSView {
     private var previewLayer: AVCaptureVideoPreviewLayer?

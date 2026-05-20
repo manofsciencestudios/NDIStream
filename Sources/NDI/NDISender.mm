@@ -60,8 +60,12 @@
     NDIlib_FourCC_video_type_e fourCC;
     if (pf == kCVPixelFormatType_422YpCbCr8) {
         fourCC = NDIlib_FourCC_type_UYVY;
-    } else {
+    } else if (pf == kCVPixelFormatType_32BGRA) {
         fourCC = NDIlib_FourCC_type_BGRA;
+    } else {
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+        os_unfair_lock_unlock(&_lock);
+        return;
     }
 
     NDIlib_video_frame_v2_t frame;

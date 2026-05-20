@@ -1,20 +1,5 @@
 import AppKit
 import AVFoundation
-import SwiftUI
-
-struct DisplayLayerHostView: NSViewRepresentable {
-    let displayLayer: AVSampleBufferDisplayLayer
-
-    func makeNSView(context: Context) -> DisplayLayerHostNSView {
-        let v = DisplayLayerHostNSView()
-        v.attach(displayLayer: displayLayer)
-        return v
-    }
-
-    func updateNSView(_ nsView: DisplayLayerHostNSView, context: Context) {
-        nsView.attach(displayLayer: displayLayer)
-    }
-}
 
 final class DisplayLayerHostNSView: NSView {
     private var attachedLayer: AVSampleBufferDisplayLayer?

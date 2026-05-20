@@ -1,8 +1,8 @@
+import AppKit
 import AVFoundation
 import Combine
 import CoreMedia
 import Foundation
-import SwiftUI
 
 @MainActor
 final class ReceiverModel: NSObject, ObservableObject {
