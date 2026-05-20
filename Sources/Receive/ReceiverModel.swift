@@ -79,6 +79,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         r.delegate = self
         receiver = r
         isConnected = true
+        ActivityKeeper.begin("receiver")
         statusLine = "Connecting to \(name)…"
         lastFormat = nil
         receivedFrameCount = 0
@@ -93,6 +94,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         receiver?.stop()
         receiver = nil
         isConnected = false
+        ActivityKeeper.end("receiver")
         displayLayer.flushAndRemoveImage()
         statusLine = "Disconnected"
         lastFormat = nil
@@ -170,6 +172,7 @@ extension ReceiverModel: NDIReceiverDelegate {
         receiver?.stop()
         receiver = nil
         isConnected = false
+        ActivityKeeper.end("receiver")
         displayLayer.flushAndRemoveImage()
         statusLine = "Source offline"
         lastFormat = nil

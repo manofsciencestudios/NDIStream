@@ -30,5 +30,7 @@
 	<string>NDIStream needs camera access to broadcast video over NDI.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppSleepDisabled</key>
+	<true/>
 </dict>
 </plist>

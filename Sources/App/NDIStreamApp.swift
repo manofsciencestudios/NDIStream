@@ -43,6 +43,36 @@ enum DebugLog {
 }
 
 @MainActor
+enum ActivityKeeper {
+    private static var reasons: Set<String> = []
+    private static var token: NSObjectProtocol?
+
+    static func begin(_ reason: String) {
+        reasons.insert(reason)
+        guard token == nil else { return }
+        token = ProcessInfo.processInfo.beginActivity(
+            options: [
+                .userInitiated,
+                .latencyCritical,
+                .idleSystemSleepDisabled,
+                .suddenTerminationDisabled,
+                .automaticTerminationDisabled
+            ],
+            reason: "NDIStream active video: \(reason)"
+        )
+        DebugLog.write("activity begin reasons=\(Array(reasons).sorted())")
+    }
+
+    static func end(_ reason: String) {
+        reasons.remove(reason)
+        guard reasons.isEmpty, let active = token else { return }
+        ProcessInfo.processInfo.endActivity(active)
+        token = nil
+        DebugLog.write("activity end")
+    }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let senderController = BroadcastController()
     private let receiverModel = ReceiverModel()

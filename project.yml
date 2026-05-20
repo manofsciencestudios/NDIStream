@@ -26,6 +26,7 @@ targets:
       properties:
         NSCameraUsageDescription: "NDIStream needs camera access to broadcast video over NDI."
         NSHighResolutionCapable: true
+        NSAppSleepDisabled: true
         LSMinimumSystemVersion: "13.0"
         CFBundleName: NDIStream
         CFBundleDisplayName: NDIStream

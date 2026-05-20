@@ -174,6 +174,7 @@ final class BroadcastController: ObservableObject {
 
             self.cameraManager.start()
             self.isBroadcasting = true
+            ActivityKeeper.begin("broadcast")
             self.isTransitioning = false
             self.status = .live(width: 0, height: 0, fps: self.targetFPS)
             DebugLog.write("BroadcastController.start completed")
@@ -191,6 +192,7 @@ final class BroadcastController: ObservableObject {
         setSender(nil)
         outgoing?.stop()
         isBroadcasting = false
+        ActivityKeeper.end("broadcast")
         status = .idle
         isTransitioning = false
         DebugLog.write("BroadcastController.stop completed")
