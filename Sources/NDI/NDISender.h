@@ -12,6 +12,9 @@ NS_ASSUME_NONNULL_BEGIN
              frameRateN:(int32_t)frameRateN
              frameRateD:(int32_t)frameRateD;
 
+- (void)repeatLastFrameWithFrameRateN:(int32_t)frameRateN
+                            frameRateD:(int32_t)frameRateD;
+
 - (void)stop;
 
 @end

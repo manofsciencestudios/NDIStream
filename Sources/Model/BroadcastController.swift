@@ -52,6 +52,73 @@ private final class SenderFrameWatchdog {
     }
 }
 
+private final class SenderFrameRepeater {
+    private let queue = DispatchQueue(label: "NDIStream.SenderFrameRepeater", qos: .userInteractive)
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var lastRealFrameAt = Date()
+    private var isRepeating = false
+    private var repeatCount = 0
+
+    func start(sendRepeat: @escaping () -> Void) {
+        stop()
+        lock.lock()
+        lastRealFrameAt = Date()
+        isRepeating = false
+        repeatCount = 0
+        lock.unlock()
+
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(67))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+
+            self.lock.lock()
+            let elapsed = Date().timeIntervalSince(self.lastRealFrameAt)
+            guard elapsed >= 0.5 else {
+                self.lock.unlock()
+                return
+            }
+            if !self.isRepeating {
+                self.isRepeating = true
+                self.repeatCount = 0
+                DebugLog.write("sender frame repeater start elapsed=\(String(format: "%.2f", elapsed))")
+            }
+            self.repeatCount += 1
+            let count = self.repeatCount
+            self.lock.unlock()
+
+            sendRepeat()
+            if count == 1 || count % 30 == 0 {
+                DebugLog.write("sender frame repeater sent count=\(count)")
+            }
+        }
+        timer = t
+        t.resume()
+        DebugLog.write("sender frame repeater timer start")
+    }
+
+    func markRealFrame() {
+        lock.lock()
+        let wasRepeating = isRepeating
+        let count = repeatCount
+        isRepeating = false
+        repeatCount = 0
+        lastRealFrameAt = Date()
+        lock.unlock()
+
+        if wasRepeating {
+            DebugLog.write("sender real frames resumed after repeats=\(count)")
+        }
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+        DebugLog.write("sender frame repeater stop")
+    }
+}
+
 @MainActor
 final class BroadcastController: ObservableObject {
     enum Status: Equatable {
@@ -112,6 +179,7 @@ final class BroadcastController: ObservableObject {
     private var sender: NDISender?
     private let senderLock = NSLock()
     private let frameWatchdog = SenderFrameWatchdog()
+    private let frameRepeater = SenderFrameRepeater()
 
     private func setSender(_ s: NDISender?) {
         senderLock.lock()
@@ -207,10 +275,12 @@ final class BroadcastController: ObservableObject {
             let fpsD: Int32 = 1000
             let rec = self.recorder
             let watchdog = self.frameWatchdog
+            let repeater = self.frameRepeater
             var sentFrameCount = 0
             self.cameraManager.onFrame = { [weak self] pb, pts in
                 guard let self else { return }
                 watchdog.markFrame()
+                repeater.markRealFrame()
                 if let snd = self.currentSender() {
                     sentFrameCount += 1
                     if sentFrameCount == 1 || sentFrameCount % 60 == 0 {
@@ -224,9 +294,12 @@ final class BroadcastController: ObservableObject {
                 rec.append(pixelBuffer: pb, pts: pts)
             }
 
-            let manager = self.cameraManager
             self.frameWatchdog.start { count, elapsed in
-                manager.restartSession(reason: "sender watchdog stall \(count), elapsed \(String(format: "%.2f", elapsed))s")
+                DebugLog.write("sender watchdog stall observed count=\(count) elapsed=\(String(format: "%.2f", elapsed)); capture session left running")
+            }
+            self.frameRepeater.start { [weak self] in
+                guard let self, let snd = self.currentSender() else { return }
+                snd.repeatLastFrame(withFrameRateN: fpsN, frameRateD: fpsD)
             }
             self.cameraManager.start()
             self.isBroadcasting = true
@@ -242,6 +315,7 @@ final class BroadcastController: ObservableObject {
         guard isBroadcasting, !isTransitioning else { return }
         isTransitioning = true
         if recorder.isRecording { recorder.stop() }
+        frameRepeater.stop()
         frameWatchdog.stop()
         cameraManager.onFrame = nil
         cameraManager.stop()

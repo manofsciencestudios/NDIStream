@@ -95,6 +95,48 @@
     os_unfair_lock_unlock(&_lock);
 }
 
+- (void)repeatLastFrameWithFrameRateN:(int32_t)frameRateN
+                            frameRateD:(int32_t)frameRateD {
+    os_unfair_lock_lock(&_lock);
+    if (_sender == NULL || _heldBuffer == NULL) {
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
+
+    uint8_t *src = (uint8_t *)CVPixelBufferGetBaseAddress(_heldBuffer);
+    if (!src) {
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
+
+    OSType pf = CVPixelBufferGetPixelFormatType(_heldBuffer);
+    NDIlib_FourCC_video_type_e fourCC;
+    if (pf == kCVPixelFormatType_422YpCbCr8) {
+        fourCC = NDIlib_FourCC_type_UYVY;
+    } else if (pf == kCVPixelFormatType_32BGRA) {
+        fourCC = NDIlib_FourCC_type_BGRA;
+    } else {
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
+
+    NDIlib_video_frame_v2_t frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.xres = (int)CVPixelBufferGetWidth(_heldBuffer);
+    frame.yres = (int)CVPixelBufferGetHeight(_heldBuffer);
+    frame.FourCC = fourCC;
+    frame.frame_rate_N = frameRateN;
+    frame.frame_rate_D = frameRateD;
+    frame.picture_aspect_ratio = 0.0f;
+    frame.frame_format_type = NDIlib_frame_format_type_progressive;
+    frame.timecode = NDIlib_send_timecode_synthesize;
+    frame.p_data = src;
+    frame.line_stride_in_bytes = (int)CVPixelBufferGetBytesPerRow(_heldBuffer);
+
+    NDIlib_send_send_video_async_v2(_sender, &frame);
+    os_unfair_lock_unlock(&_lock);
+}
+
 - (void)stop {
     os_unfair_lock_lock(&_lock);
     if (_sender != NULL) {
