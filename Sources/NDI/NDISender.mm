@@ -44,7 +44,17 @@
         return;
     }
 
-    CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    CVReturn lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    if (lockResult != kCVReturnSuccess) {
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
+    uint8_t *src = (uint8_t *)CVPixelBufferGetBaseAddress(pixelBuffer);
+    if (!src) {
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+        os_unfair_lock_unlock(&_lock);
+        return;
+    }
 
     OSType pf = CVPixelBufferGetPixelFormatType(pixelBuffer);
     NDIlib_FourCC_video_type_e fourCC;
@@ -64,7 +74,7 @@
     frame.picture_aspect_ratio = 0.0f;
     frame.frame_format_type = NDIlib_frame_format_type_progressive;
     frame.timecode = NDIlib_send_timecode_synthesize;
-    frame.p_data = (uint8_t *)CVPixelBufferGetBaseAddress(pixelBuffer);
+    frame.p_data = src;
     frame.line_stride_in_bytes = (int)CVPixelBufferGetBytesPerRow(pixelBuffer);
 
     CVPixelBufferRef previous = _heldBuffer;

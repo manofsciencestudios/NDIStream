@@ -56,6 +56,20 @@ final class BroadcastController: ObservableObject {
     let cameraManager = CameraManager()
     let recorder = Recorder(filenamePrefix: "Sender")
     private var sender: NDISender?
+    private let senderLock = NSLock()
+
+    private func setSender(_ s: NDISender?) {
+        senderLock.lock()
+        sender = s
+        senderLock.unlock()
+    }
+
+    private func currentSender() -> NDISender? {
+        senderLock.lock()
+        let s = sender
+        senderLock.unlock()
+        return s
+    }
 
     init() {
         let cameras = CameraManager.availableDevices()
@@ -119,14 +133,14 @@ final class BroadcastController: ObservableObject {
                 self.isTransitioning = false
                 return
             }
-            self.sender = s
+            self.setSender(s)
 
             let fpsN = Int32(self.targetFPS * 1000)
             let fpsD: Int32 = 1000
             let rec = self.recorder
             self.cameraManager.onFrame = { [weak self] pb, pts in
                 guard let self else { return }
-                if let snd = self.senderRef() {
+                if let snd = self.currentSender() {
                     snd.send(pb, frameRateN: fpsN, frameRateD: fpsD)
                 }
                 self.observeDimensionsIfNeeded(pb)
@@ -146,23 +160,23 @@ final class BroadcastController: ObservableObject {
         if recorder.isRecording { recorder.stop() }
         cameraManager.onFrame = nil
         cameraManager.stop()
-        sender?.stop()
-        sender = nil
+        let outgoing = currentSender()
+        setSender(nil)
+        outgoing?.stop()
         isBroadcasting = false
         status = .idle
         isTransitioning = false
     }
 
     private func restartSender() {
-        sender?.stop()
-        sender = NDISender(sourceName: sourceName, clockVideo: smoothPacing)
-        if sender == nil {
+        let outgoing = currentSender()
+        setSender(nil)
+        outgoing?.stop()
+        let fresh = NDISender(sourceName: sourceName, clockVideo: smoothPacing)
+        setSender(fresh)
+        if fresh == nil {
             status = .error("Failed to recreate NDI sender.")
         }
-    }
-
-    private func senderRef() -> NDISender? {
-        return sender
     }
 
     private var lastReportedDims: (Int, Int) = (0, 0)
