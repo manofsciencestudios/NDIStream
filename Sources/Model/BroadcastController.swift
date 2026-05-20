@@ -360,7 +360,9 @@ final class BroadcastController: ObservableObject {
             self.setSender(s)
             if self.audioEnabled {
                 self.cameraManager.onAudioSampleBuffer = { [weak self] sampleBuffer in
-                    self?.currentSender()?.sendAudio(sampleBuffer)
+                    guard let self else { return }
+                    self.currentSender()?.sendAudio(sampleBuffer)
+                    self.recorder.appendAudio(sampleBuffer: sampleBuffer)
                 }
                 DebugLog.write("sender audio enabled device=\(audioDevice?.localizedName ?? "unknown")")
             } else {
@@ -405,7 +407,7 @@ final class BroadcastController: ObservableObject {
             self.status = .live(width: 0, height: 0, fps: self.targetFPS)
             if self.autoRecord, !self.recorder.isRecording {
                 DebugLog.write("auto-record start (sender)")
-                self.recorder.start(slate: self.slate)
+                self.recorder.start(slate: self.slate, includeAudio: self.audioEnabled)
             }
             DebugLog.write("BroadcastController.start completed")
         }

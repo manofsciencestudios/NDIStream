@@ -108,7 +108,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         DebugLog.write("receiver created name=\(source.name) address=\(source.address)")
         if autoRecord, !recorder.isRecording {
             DebugLog.write("auto-record start (receiver)")
-            recorder.start(slate: slate)
+            recorder.start(slate: slate, includeAudio: true)
         }
     }
 
@@ -179,6 +179,11 @@ extension ReceiverModel: NDIReceiverDelegate {
                                               channels: Int32,
                                               samplesPerChannel: Int32,
                                               channelStrideBytes: Int32) {
+        recorder.appendPlanarFloatAudio(samples: samples,
+                                        sampleRate: sampleRate,
+                                        channels: channels,
+                                        samplesPerChannel: samplesPerChannel,
+                                        channelStrideBytes: channelStrideBytes)
         audioPlayer.schedule(samples: samples,
                              sampleRate: sampleRate,
                              channels: channels,

@@ -612,7 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if senderController.recorder.isRecording {
             senderController.recorder.stop()
         } else {
-            senderController.recorder.start(slate: senderController.slate)
+            senderController.recorder.start(slate: senderController.slate, includeAudio: senderController.audioEnabled)
         }
     }
     @objc private func senderSlateEdited() { senderController.slate = senderSlateField.stringValue }
@@ -655,7 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if receiverModel.recorder.isRecording {
             receiverModel.recorder.stop()
         } else {
-            receiverModel.recorder.start(slate: receiverModel.slate)
+            receiverModel.recorder.start(slate: receiverModel.slate, includeAudio: true)
         }
     }
     @objc private func receiverSlateEdited() { receiverModel.slate = receiverSlateField.stringValue }
