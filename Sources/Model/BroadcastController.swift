@@ -166,6 +166,10 @@ final class BroadcastController: ObservableObject {
     }
     @Published var smoothPacing: Bool {
         didSet {
+            if lowestLatency, smoothPacing {
+                smoothPacing = false
+                return
+            }
             UserDefaults.standard.set(smoothPacing, forKey: "smoothPacing")
             if isBroadcasting { restartSender() }
         }
@@ -173,9 +177,16 @@ final class BroadcastController: ObservableObject {
     @Published var lowestLatency: Bool {
         didSet {
             UserDefaults.standard.set(lowestLatency, forKey: "lowestLatency")
+            if lowestLatency, smoothPacing {
+                smoothPacing = false
+            }
             NDIRuntime.writeConfigLowestLatency(lowestLatency)
-            DebugLog.write("lowestLatency=\(lowestLatency)")
-            if isBroadcasting { restartSender() }
+            DebugLog.write("lowestLatency=\(lowestLatency) ndiInitialized=\(NDIRuntime.isInitialized())")
+            if NDIRuntime.isInitialized() {
+                status = .error("Lowest latency changes after relaunch. Quit and reopen NDIStream before broadcasting.")
+            } else if isBroadcasting {
+                restartSender()
+            }
         }
     }
     @Published var isBroadcasting: Bool = false
@@ -227,8 +238,12 @@ final class BroadcastController: ObservableObject {
         let savedPixelFormat = UserDefaults.standard.string(forKey: "pixelFormat").flatMap(CapturePixelFormat.init(rawValue:))
         self.pixelFormat = savedPixelFormat ?? .bgra
 
-        self.smoothPacing = UserDefaults.standard.bool(forKey: "smoothPacing")
-        self.lowestLatency = UserDefaults.standard.bool(forKey: "lowestLatency")
+        let savedLowestLatency = UserDefaults.standard.bool(forKey: "lowestLatency")
+        self.lowestLatency = savedLowestLatency
+        self.smoothPacing = savedLowestLatency ? false : UserDefaults.standard.bool(forKey: "smoothPacing")
+        if savedLowestLatency {
+            UserDefaults.standard.set(false, forKey: "smoothPacing")
+        }
         cameraManager.setPixelFormat(pixelFormat)
         DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
     }

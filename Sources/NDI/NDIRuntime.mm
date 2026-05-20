@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 static NSString *const kLowestLatencyDefaultsKey = @"lowestLatency";
+static BOOL gNDIInitialized = NO;
 
 @implementation NDIRuntime
 
@@ -24,10 +25,17 @@ static NSString *const kLowestLatencyDefaultsKey = @"lowestLatency";
     NSString *dir = [self configDirectory];
     if (dir == nil) return;
     NSString *path = [dir stringByAppendingPathComponent:@"ndi-config.v1.json"];
+
+    if (!lowest) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        setenv("NDI_CONFIG_DIR", [dir fileSystemRepresentation], 1);
+        return;
+    }
+
     NSDictionary *config = @{
         @"ndi": @{
-            @"rudp":    @{ @"send": @{ @"enable": lowest ? @NO  : @YES } },
-            @"unicast": @{ @"send": @{ @"enable": lowest ? @YES : @NO  } }
+            @"rudp":    @{ @"send": @{ @"enable": @NO } },
+            @"unicast": @{ @"send": @{ @"enable": @YES } }
         }
     };
     NSError *err = nil;
@@ -47,8 +55,13 @@ static NSString *const kLowestLatencyDefaultsKey = @"lowestLatency";
         BOOL lowest = [[NSUserDefaults standardUserDefaults] boolForKey:kLowestLatencyDefaultsKey];
         [self writeConfigLowestLatency:lowest];
         ok = NDIlib_initialize();
+        gNDIInitialized = ok;
     });
     return ok;
+}
+
++ (BOOL)isInitialized {
+    return gNDIInitialized;
 }
 
 @end

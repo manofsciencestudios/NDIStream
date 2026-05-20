@@ -288,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pacingCheckbox = NSButton(checkboxWithTitle: "Smooth pacing (+1 frame latency)", target: self, action: #selector(pacingChanged))
         content.addArrangedSubview(pacingCheckbox)
 
-        lowestLatencyCheckbox = NSButton(checkboxWithTitle: "Lowest latency (unicast UDP, no RUDP)", target: self, action: #selector(lowestLatencyChanged))
+        lowestLatencyCheckbox = NSButton(checkboxWithTitle: "Lowest latency (unicast UDP, no RUDP; relaunch to apply)", target: self, action: #selector(lowestLatencyChanged))
         content.addArrangedSubview(lowestLatencyCheckbox)
 
         let recordRow = row()
@@ -392,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fpsControl.selectedSegment = senderController.targetFPS == 60 ? 1 : 0
         pixelFormatControl.selectedSegment = CapturePixelFormat.allCases.firstIndex(of: senderController.pixelFormat) ?? 0
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
+        pacingCheckbox.isEnabled = !senderController.lowestLatency
         lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
         sourceNameField.isEnabled = !senderController.isBroadcasting
         senderRecordButton.isEnabled = senderController.isBroadcasting
