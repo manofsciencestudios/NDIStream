@@ -24,8 +24,10 @@ final class ReceiverModel: NSObject, ObservableObject {
 
     private let finder: NDIFinder?
     private var receiver: NDIReceiver?
+    private var receivedFrameCount = 0
 
     override init() {
+        DebugLog.write("ReceiverModel.init")
         self.finder = NDIFinder.startNew()
         super.init()
 
@@ -40,8 +42,10 @@ final class ReceiverModel: NSObject, ObservableObject {
             guard let self else { return }
             Task { @MainActor in
                 self.availableSources = sources.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                DebugLog.write("receiver sources changed count=\(self.availableSources.count) names=\(self.availableSources.map { $0.name })")
                 if self.selectedSourceName.isEmpty, let first = self.availableSources.first {
                     self.selectedSourceName = first.name
+                    DebugLog.write("receiver selected first source=\(first.name)")
                 }
             }
         }
@@ -52,6 +56,7 @@ final class ReceiverModel: NSObject, ObservableObject {
     }
 
     func connect() {
+        DebugLog.write("receiver connect requested selected=\(selectedSourceName) available=\(availableSources.map { $0.name })")
         guard !isConnected else { return }
         let name = selectedSourceName
         guard !name.isEmpty else {
@@ -59,6 +64,7 @@ final class ReceiverModel: NSObject, ObservableObject {
             return
         }
         guard let source = availableSources.first(where: { $0.name == name }) else {
+            DebugLog.write("ERROR receiver source not online name=\(name)")
             statusLine = "Source '\(name)' not currently online"
             return
         }
@@ -66,6 +72,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         UserDefaults.standard.set(name, forKey: "lastReceiverSource")
 
         guard let r = NDIReceiver(sourceName: source.name, sourceAddress: source.address) else {
+            DebugLog.write("ERROR receiver create failed name=\(source.name) address=\(source.address)")
             statusLine = "Failed to create receiver"
             return
         }
@@ -74,9 +81,12 @@ final class ReceiverModel: NSObject, ObservableObject {
         isConnected = true
         statusLine = "Connecting to \(name)…"
         lastFormat = nil
+        receivedFrameCount = 0
+        DebugLog.write("receiver created name=\(source.name) address=\(source.address)")
     }
 
     func disconnect() {
+        DebugLog.write("receiver disconnect requested")
         guard isConnected || receiver != nil else { return }
         if recorder.isRecording { recorder.stop() }
         receiver?.delegate = nil
@@ -86,6 +96,7 @@ final class ReceiverModel: NSObject, ObservableObject {
         displayLayer.flushAndRemoveImage()
         statusLine = "Disconnected"
         lastFormat = nil
+        DebugLog.write("receiver disconnected")
     }
 }
 
@@ -123,7 +134,13 @@ extension ReceiverModel: NDIReceiverDelegate {
                                      frameRateN: Int,
                                      frameRateD: Int,
                                      fourCC: UInt32) {
+        receivedFrameCount += 1
         if displayLayer.status == .failed {
+            DebugLog.write("WARN receiver displayLayer failed; flushing error=\(String(describing: displayLayer.error))")
+            displayLayer.flush()
+        }
+        if !displayLayer.isReadyForMoreMediaData {
+            DebugLog.write("WARN receiver displayLayer backpressure; flushing queued frames")
             displayLayer.flush()
         }
         displayLayer.enqueue(sb)
@@ -136,13 +153,18 @@ extension ReceiverModel: NDIReceiverDelegate {
         }
         let fourCCStr = Self.fourCCString(fourCC)
         let fmt = FrameFormat(width: width, height: height, fps: fps, fourCC: fourCCStr)
+        if receivedFrameCount == 1 || receivedFrameCount % 60 == 0 {
+            DebugLog.write("receiver frame \(receivedFrameCount) \(width)x\(height) fps=\(fps) fourCC=\(fourCCStr) displayStatus=\(displayLayer.status.rawValue)")
+        }
         if lastFormat != fmt {
             lastFormat = fmt
             statusLine = "\(width)×\(height) @ \(fps) • \(fourCCStr)"
+            DebugLog.write("receiver format \(statusLine)")
         }
     }
 
     private func handleRemoteDisconnect() {
+        DebugLog.write("WARN receiver remote disconnect")
         if recorder.isRecording { recorder.stop() }
         receiver?.delegate = nil
         receiver?.stop()

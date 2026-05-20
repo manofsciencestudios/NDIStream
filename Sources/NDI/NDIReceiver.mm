@@ -4,6 +4,36 @@
 #include <atomic>
 #include <string.h>
 
+static void NDIReceiverDebugLog(NSString *message) {
+    @autoreleasepool {
+        NSURL *desktop = [[NSFileManager defaultManager] URLsForDirectory:NSDesktopDirectory
+                                                                 inDomains:NSUserDomainMask].firstObject;
+        if (!desktop) {
+            desktop = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"]
+                                 isDirectory:YES];
+        }
+        NSURL *url = [desktop URLByAppendingPathComponent:@"NDIStream-debug.log"];
+        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+        formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX";
+        NSString *line = [NSString stringWithFormat:@"%@ [NDIReceiver.mm] %@\n",
+                          [formatter stringFromDate:[NSDate date]],
+                          message];
+        NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:url.path]) {
+            [@"NDIStream debug log\n\n" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:url error:nil];
+        if (!handle) return;
+        @try {
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+        } @catch (__unused NSException *exception) {
+        }
+        [handle closeFile];
+    }
+}
+
 @implementation NDIReceiver {
     NDIlib_recv_instance_t _recv;
     std::atomic<bool> _stopFlag;
@@ -45,6 +75,7 @@
     _cleanedUp.store(false);
     _frameCounter = 0;
     _captureQueue = dispatch_queue_create("NDIStream.NDIReceiver.Capture", DISPATCH_QUEUE_SERIAL);
+    NDIReceiverDebugLog([NSString stringWithFormat:@"create source=%@ address=%@", sourceName, sourceAddress]);
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(_captureQueue, ^{
@@ -56,6 +87,7 @@
 
 - (void)captureLoop {
     int consecutiveNoneCount = 0;
+    NDIReceiverDebugLog(@"captureLoop start");
     while (!_stopFlag.load()) {
         NDIlib_video_frame_v2_t video;
         memset(&video, 0, sizeof(video));
@@ -70,24 +102,22 @@
 
         switch (type) {
             case NDIlib_frame_type_video: {
+                if (consecutiveNoneCount > 0) {
+                    NDIReceiverDebugLog([NSString stringWithFormat:@"video resumed after %d empty polls", consecutiveNoneCount]);
+                }
                 consecutiveNoneCount = 0;
                 [self handleVideoFrame:&video];
                 break;
             }
             case NDIlib_frame_type_none: {
                 consecutiveNoneCount++;
-                if (consecutiveNoneCount >= 5) {
-                    id<NDIReceiverDelegate> d = self.delegate;
-                    if (d) {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [d receiverDidDisconnect];
-                        });
-                    }
-                    _stopFlag.store(true);
+                if (consecutiveNoneCount == 5 || consecutiveNoneCount % 15 == 0) {
+                    NDIReceiverDebugLog([NSString stringWithFormat:@"no video polls=%d; keeping receiver alive", consecutiveNoneCount]);
                 }
                 break;
             }
             case NDIlib_frame_type_error: {
+                NDIReceiverDebugLog(@"capture error; disconnecting");
                 id<NDIReceiverDelegate> d = self.delegate;
                 if (d) {
                     dispatch_async(dispatch_get_main_queue(), ^{
@@ -102,6 +132,7 @@
                 break;
         }
     }
+    NDIReceiverDebugLog(@"captureLoop exit");
 }
 
 - (void)handleVideoFrame:(NDIlib_video_frame_v2_t *)video {
@@ -123,7 +154,7 @@
     }
 
     if (!supported) {
-        NSLog(@"NDIReceiver: unsupported pixel format FourCC=0x%08x", (unsigned)video->FourCC);
+        NDIReceiverDebugLog([NSString stringWithFormat:@"unsupported pixel format FourCC=0x%08x", (unsigned)video->FourCC]);
         NDIlib_recv_free_video_v2(_recv, video);
         return;
     }
@@ -140,21 +171,21 @@
                                       (__bridge CFDictionaryRef)attrs,
                                       &pb);
     if (r != kCVReturnSuccess || pb == NULL) {
-        NSLog(@"NDIReceiver: CVPixelBufferCreate failed: %d", r);
+        NDIReceiverDebugLog([NSString stringWithFormat:@"CVPixelBufferCreate failed: %d", r]);
         NDIlib_recv_free_video_v2(_recv, video);
         return;
     }
 
     CVReturn lockResult = CVPixelBufferLockBaseAddress(pb, 0);
     if (lockResult != kCVReturnSuccess) {
-        NSLog(@"NDIReceiver: CVPixelBufferLockBaseAddress failed: %d", lockResult);
+        NDIReceiverDebugLog([NSString stringWithFormat:@"CVPixelBufferLockBaseAddress failed: %d", lockResult]);
         CVPixelBufferRelease(pb);
         NDIlib_recv_free_video_v2(_recv, video);
         return;
     }
     uint8_t *dst = (uint8_t *)CVPixelBufferGetBaseAddress(pb);
     if (!dst) {
-        NSLog(@"NDIReceiver: CVPixelBufferGetBaseAddress returned NULL");
+        NDIReceiverDebugLog(@"CVPixelBufferGetBaseAddress returned NULL");
         CVPixelBufferUnlockBaseAddress(pb, 0);
         CVPixelBufferRelease(pb);
         NDIlib_recv_free_video_v2(_recv, video);
@@ -183,7 +214,7 @@
     CMVideoFormatDescriptionRef fmt = NULL;
     OSStatus s = CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fmt);
     if (s != noErr || fmt == NULL) {
-        NSLog(@"NDIReceiver: CMVideoFormatDescriptionCreateForImageBuffer failed: %d", (int)s);
+        NDIReceiverDebugLog([NSString stringWithFormat:@"CMVideoFormatDescriptionCreateForImageBuffer failed: %d", (int)s]);
         CVPixelBufferRelease(pb);
         return;
     }
@@ -208,7 +239,7 @@
     CVPixelBufferRelease(pb);
 
     if (s != noErr || sb == NULL) {
-        NSLog(@"NDIReceiver: CMSampleBufferCreateForImageBuffer failed: %d", (int)s);
+        NDIReceiverDebugLog([NSString stringWithFormat:@"CMSampleBufferCreateForImageBuffer failed: %d", (int)s]);
         return;
     }
 
@@ -235,6 +266,7 @@
 }
 
 - (void)stop {
+    NDIReceiverDebugLog(@"stop requested");
     _stopFlag.store(true);
     if (_cleanedUp.exchange(true)) return;
     if (_captureQueue) {
