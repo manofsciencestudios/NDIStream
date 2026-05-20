@@ -46,9 +46,11 @@ enum DebugLog {
 enum ActivityKeeper {
     private static var reasons: Set<String> = []
     private static var token: NSObjectProtocol?
+    private static var keepAliveWindow: NSWindow?
 
     static func begin(_ reason: String) {
         reasons.insert(reason)
+        showKeepAliveWindow()
         guard token == nil else { return }
         token = ProcessInfo.processInfo.beginActivity(
             options: [
@@ -68,7 +70,55 @@ enum ActivityKeeper {
         guard reasons.isEmpty, let active = token else { return }
         ProcessInfo.processInfo.endActivity(active)
         token = nil
+        hideKeepAliveWindow()
         DebugLog.write("activity end")
+    }
+
+    private static func showKeepAliveWindow() {
+        guard keepAliveWindow == nil else { return }
+
+        let size = NSSize(width: 2, height: 2)
+        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = NSRect(
+            x: visibleFrame.maxX - size.width - 1,
+            y: visibleFrame.minY + 1,
+            width: size.width,
+            height: size.height
+        )
+
+        let view = NSView(frame: NSRect(origin: .zero, size: size))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.02).cgColor
+
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = false
+        window.alphaValue = 0.02
+        window.ignoresMouseEvents = true
+        window.level = .screenSaver
+        window.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary,
+            .ignoresCycle
+        ]
+        window.orderFrontRegardless()
+        keepAliveWindow = window
+        DebugLog.write("keepalive window shown frame=\(NSStringFromRect(frame))")
+    }
+
+    private static func hideKeepAliveWindow() {
+        guard let window = keepAliveWindow else { return }
+        window.orderOut(nil)
+        keepAliveWindow = nil
+        DebugLog.write("keepalive window hidden")
     }
 }
 
