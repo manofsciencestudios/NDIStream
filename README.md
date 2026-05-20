@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="icon.png" width="160" alt="NDIStream icon" />
+</p>
+
 # NDIStream
 
 Dead-simple macOS app for sending and receiving [NDI](https://ndi.video/) video on the local network.
+
+## Download
+
+Grab the latest universal `.app` from [Releases](https://github.com/mikecerisano/NDIStream/releases). Unzip and drag into Applications (or run from anywhere). First launch: right-click → Open to bypass the unidentified-developer warning.
 
 Built because every other Mac NDI tool is either paid, part of NewTek's bloated NDI Tools suite, or both. This is one window for sending your camera, one window for receiving a source, and a record button on each. That's it.
 
