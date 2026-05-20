@@ -344,7 +344,7 @@ final class Recorder: ObservableObject, @unchecked Sendable {
     private func scheduleAudioWaitFallbackIfNeeded() {
         guard !audioWaitFallbackScheduled else { return }
         audioWaitFallbackScheduled = true
-        writeQueue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        writeQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self,
                   self.isWriterActive(),
                   self.writer == nil,
@@ -355,6 +355,9 @@ final class Recorder: ObservableObject, @unchecked Sendable {
                              firstPTS: pendingVideo.pts,
                              audioFormat: nil)
             self.appendPendingVideoIfPossible()
+            Task { @MainActor in
+                self.lastError = "No audio in first second — recording video only"
+            }
         }
     }
 
