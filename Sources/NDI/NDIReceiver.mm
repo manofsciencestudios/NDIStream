@@ -104,6 +104,12 @@ static void NDIReceiverDebugLog(NSString *message) {
             case NDIlib_frame_type_video: {
                 if (consecutiveNoneCount > 0) {
                     NDIReceiverDebugLog([NSString stringWithFormat:@"video resumed after %d empty polls", consecutiveNoneCount]);
+                    id<NDIReceiverDelegate> d = self.delegate;
+                    if (d && [d respondsToSelector:@selector(receiverDidResume)]) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [d receiverDidResume];
+                        });
+                    }
                 }
                 consecutiveNoneCount = 0;
                 [self handleVideoFrame:&video];
@@ -113,6 +119,15 @@ static void NDIReceiverDebugLog(NSString *message) {
                 consecutiveNoneCount++;
                 if (consecutiveNoneCount == 5 || consecutiveNoneCount % 15 == 0) {
                     NDIReceiverDebugLog([NSString stringWithFormat:@"no video polls=%d; keeping receiver alive", consecutiveNoneCount]);
+                }
+                if (consecutiveNoneCount >= 2) {
+                    id<NDIReceiverDelegate> d = self.delegate;
+                    if (d && [d respondsToSelector:@selector(receiverDidStallForSeconds:)]) {
+                        NSInteger secs = (NSInteger)consecutiveNoneCount;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [d receiverDidStallForSeconds:secs];
+                        });
+                    }
                 }
                 break;
             }

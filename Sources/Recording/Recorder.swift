@@ -15,6 +15,7 @@ final class Recorder: ObservableObject, @unchecked Sendable {
     private let writeQueue = DispatchQueue(label: "NDIStream.Recorder.Write")
     private var startPTS: CMTime?
     private var writerActive = false
+    private var pendingSlate: String = ""
     private let writerActiveLock = NSLock()
 
     @MainActor private var timer: Timer?
@@ -38,19 +39,21 @@ final class Recorder: ObservableObject, @unchecked Sendable {
     }
 
     @MainActor
-    func start() {
+    func start(slate: String = "") {
         guard !isRecording else { return }
         isRecording = true
         elapsed = 0
         startWallTime = Date()
         lastError = nil
         setWriterActive(true)
+        let capturedSlate = slate
         writeQueue.async { [weak self] in
             guard let self else { return }
             self.writer = nil
             self.input = nil
             self.adaptor = nil
             self.startPTS = nil
+            self.pendingSlate = capturedSlate
         }
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -115,7 +118,7 @@ final class Recorder: ObservableObject, @unchecked Sendable {
     }
 
     private func setupWriter(width: Int, height: Int, pixelFormat: OSType, firstPTS: CMTime) {
-        let url = Recorder.makeURL(prefix: prefix)
+        let url = Recorder.makeURL(prefix: prefix, slate: pendingSlate)
         do {
             try Recorder.ensureDirectory()
             let w = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -193,11 +196,19 @@ final class Recorder: ObservableObject, @unchecked Sendable {
                                                 withIntermediateDirectories: true)
     }
 
-    static func makeURL(prefix: String) -> URL {
+    static func makeURL(prefix: String, slate: String = "") -> URL {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        let name = "\(prefix)-\(df.string(from: Date())).mov"
+        let cleanSlate = sanitizeSlate(slate)
+        let middle = cleanSlate.isEmpty ? "" : "-\(cleanSlate)"
+        let name = "\(prefix)\(middle)-\(df.string(from: Date())).mov"
         return recordingsDirectory().appendingPathComponent(name)
+    }
+
+    static func sanitizeSlate(_ slate: String) -> String {
+        let illegal: Set<Character> = ["/", "\\", ":", "<", ">", "|", "?", "*", "\"", "\0", "\n", "\r", "\t"]
+        let filtered = String(slate.filter { !illegal.contains($0) })
+        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func revealRecordingsFolder() {

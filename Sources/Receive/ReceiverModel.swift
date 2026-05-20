@@ -11,6 +11,13 @@ final class ReceiverModel: NSObject, ObservableObject {
     @Published var isConnected: Bool = false
     @Published var statusLine: String = "No source selected"
     @Published var lastFormat: FrameFormat? = nil
+    @Published var slate: String = "" {
+        didSet { UserDefaults.standard.set(slate, forKey: "receiverSlate") }
+    }
+    @Published var autoRecord: Bool = false {
+        didSet { UserDefaults.standard.set(autoRecord, forKey: "receiverAutoRecord") }
+    }
+    @Published var isLocked: Bool = false
 
     struct FrameFormat: Equatable {
         let width: Int
@@ -37,6 +44,8 @@ final class ReceiverModel: NSObject, ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "lastReceiverSource") {
             selectedSourceName = saved
         }
+        self.slate = UserDefaults.standard.string(forKey: "receiverSlate") ?? ""
+        self.autoRecord = UserDefaults.standard.bool(forKey: "receiverAutoRecord")
 
         finder?.onSourcesChanged = { [weak self] sources in
             guard let self else { return }
@@ -84,6 +93,10 @@ final class ReceiverModel: NSObject, ObservableObject {
         lastFormat = nil
         receivedFrameCount = 0
         DebugLog.write("receiver created name=\(source.name) address=\(source.address)")
+        if autoRecord, !recorder.isRecording {
+            DebugLog.write("auto-record start (receiver)")
+            recorder.start(slate: slate)
+        }
     }
 
     func disconnect() {
@@ -127,6 +140,20 @@ extension ReceiverModel: NDIReceiverDelegate {
     nonisolated func receiverDidDisconnect() {
         Task { @MainActor in
             self.handleRemoteDisconnect()
+        }
+    }
+
+    nonisolated func receiverDidStall(forSeconds seconds: Int) {
+        Task { @MainActor in
+            guard self.isConnected else { return }
+            self.statusLine = "Reconnecting (\(seconds)s)…"
+        }
+    }
+
+    nonisolated func receiverDidResume() {
+        Task { @MainActor in
+            guard self.isConnected else { return }
+            self.statusLine = "Reconnected"
         }
     }
 

@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
                             frameRateD:(int)frameRateD
                                 fourCC:(uint32_t)fourCC;
 - (void)receiverDidDisconnect;
+@optional
+- (void)receiverDidStallForSeconds:(NSInteger)seconds;
+- (void)receiverDidResume;
 @end
 
 @interface NDIReceiver : NSObject

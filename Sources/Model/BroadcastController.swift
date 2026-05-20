@@ -195,6 +195,13 @@ final class BroadcastController: ObservableObject {
     @Published var isBroadcasting: Bool = false
     @Published var isTransitioning: Bool = false
     @Published var status: Status = .idle
+    @Published var slate: String {
+        didSet { UserDefaults.standard.set(slate, forKey: "senderSlate") }
+    }
+    @Published var autoRecord: Bool {
+        didSet { UserDefaults.standard.set(autoRecord, forKey: "senderAutoRecord") }
+    }
+    @Published var isLocked: Bool = false
 
     let cameraManager = CameraManager()
     let recorder = Recorder(filenamePrefix: "Sender")
@@ -249,6 +256,8 @@ final class BroadcastController: ObservableObject {
         if savedLowestLatency {
             UserDefaults.standard.set(false, forKey: "smoothPacing")
         }
+        self.slate = UserDefaults.standard.string(forKey: "senderSlate") ?? ""
+        self.autoRecord = UserDefaults.standard.bool(forKey: "senderAutoRecord")
         cameraManager.setPixelFormat(pixelFormat)
         DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
     }
@@ -335,6 +344,10 @@ final class BroadcastController: ObservableObject {
             ActivityKeeper.begin("broadcast")
             self.isTransitioning = false
             self.status = .live(width: 0, height: 0, fps: self.targetFPS)
+            if self.autoRecord, !self.recorder.isRecording {
+                DebugLog.write("auto-record start (sender)")
+                self.recorder.start(slate: self.slate)
+            }
             DebugLog.write("BroadcastController.start completed")
         }
     }

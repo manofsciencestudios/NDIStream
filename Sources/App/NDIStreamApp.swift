@@ -149,6 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var senderRecordButton = NSButton()
     private var senderTimerLabel = NSTextField(labelWithString: "00:00")
     private var senderErrorLabel = NSTextField(labelWithString: "")
+    private var senderSlateField = NSTextField(string: "")
+    private var senderAutoRecordCheckbox = NSButton()
+    private var senderLockButton = NSButton()
+    private var senderCameraPrevButton = NSButton()
+    private var senderCameraNextButton = NSButton()
+    private var senderFolderButton = NSButton()
+    private var senderLogButton = NSButton()
     private var logPathLabel = NSTextField(labelWithString: "")
     private var broadcastButton = NSButton()
     private var senderStatusDot = NSView()
@@ -160,6 +167,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverRecordButton = NSButton()
     private var receiverTimerLabel = NSTextField(labelWithString: "00:00")
     private var receiverErrorLabel = NSTextField(labelWithString: "")
+    private var receiverSlateField = NSTextField(string: "")
+    private var receiverAutoRecordCheckbox = NSButton()
+    private var receiverLockButton = NSButton()
+    private var receiverSourcePrevButton = NSButton()
+    private var receiverSourceNextButton = NSButton()
+    private var receiverFolderButton = NSButton()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.write("applicationDidFinishLaunching")
@@ -257,11 +270,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         content.addArrangedSubview(sectionLabel("Camera"))
         let cameraRow = row()
-        cameraRow.addArrangedSubview(button("‹", action: #selector(previousCamera), width: 32))
+        senderCameraPrevButton = button("‹", action: #selector(previousCamera), width: 32)
+        senderCameraNextButton = button("›", action: #selector(nextCamera), width: 32)
+        cameraRow.addArrangedSubview(senderCameraPrevButton)
         cameraLabel.lineBreakMode = .byTruncatingMiddle
         cameraLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         cameraRow.addArrangedSubview(cameraLabel)
-        cameraRow.addArrangedSubview(button("›", action: #selector(nextCamera), width: 32))
+        cameraRow.addArrangedSubview(senderCameraNextButton)
         content.addArrangedSubview(cameraRow)
 
         content.addArrangedSubview(sectionLabel("NDI source name"))
@@ -270,6 +285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sourceNameField.isContinuous = false
         sourceNameField.widthAnchor.constraint(equalToConstant: 400).isActive = true
         content.addArrangedSubview(sourceNameField)
+
+        content.addArrangedSubview(sectionLabel("Slate (used in recording filename)"))
+        senderSlateField.target = self
+        senderSlateField.action = #selector(senderSlateEdited)
+        senderSlateField.isContinuous = false
+        senderSlateField.placeholderString = "e.g. S14T3"
+        senderSlateField.widthAnchor.constraint(equalToConstant: 400).isActive = true
+        content.addArrangedSubview(senderSlateField)
 
         let preview = PreviewNSView(frame: NSRect(x: 0, y: 0, width: 400, height: 225))
         preview.attach(session: senderController.cameraManager.session)
@@ -296,16 +319,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lowestLatencyPendingLabel.isHidden = true
         content.addArrangedSubview(lowestLatencyPendingLabel)
 
+        senderAutoRecordCheckbox = NSButton(checkboxWithTitle: "Auto-record when broadcasting starts", target: self, action: #selector(senderAutoRecordChanged))
+        content.addArrangedSubview(senderAutoRecordCheckbox)
+
         let recordRow = row()
         senderRecordButton = NSButton(title: "REC", target: self, action: #selector(toggleSenderRecording))
         senderTimerLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         senderErrorLabel.textColor = .systemRed
         senderErrorLabel.lineBreakMode = .byTruncatingMiddle
+        senderFolderButton = button("Folder", action: #selector(revealRecordings), width: 70)
+        senderLogButton = button("Log", action: #selector(openLog), width: 50)
+        senderLockButton = button("🔓", action: #selector(toggleSenderLock), width: 44)
         recordRow.addArrangedSubview(senderRecordButton)
         recordRow.addArrangedSubview(senderTimerLabel)
         recordRow.addArrangedSubview(senderErrorLabel)
-        recordRow.addArrangedSubview(button("Folder", action: #selector(revealRecordings), width: 70))
-        recordRow.addArrangedSubview(button("Log", action: #selector(openLog), width: 50))
+        recordRow.addArrangedSubview(senderFolderButton)
+        recordRow.addArrangedSubview(senderLogButton)
+        recordRow.addArrangedSubview(senderLockButton)
         content.addArrangedSubview(recordRow)
 
         logPathLabel.stringValue = DebugLog.url.path
@@ -331,7 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusRow.addArrangedSubview(senderStatusLabel)
         content.addArrangedSubview(statusRow)
 
-        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 700))
+        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 820))
         senderWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
@@ -340,37 +370,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         root.orientation = .vertical
         root.spacing = 0
 
-        let toolbar = row()
-        toolbar.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        toolbar.addArrangedSubview(button("‹", action: #selector(previousSource), width: 28))
+        let topBar = row()
+        topBar.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 4, right: 10)
+        receiverSourcePrevButton = button("‹", action: #selector(previousSource), width: 28)
+        receiverSourceNextButton = button("›", action: #selector(nextSource), width: 28)
+        topBar.addArrangedSubview(receiverSourcePrevButton)
         receiverSourceLabel.lineBreakMode = .byTruncatingMiddle
         receiverSourceLabel.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        toolbar.addArrangedSubview(receiverSourceLabel)
-
-        toolbar.addArrangedSubview(button("›", action: #selector(nextSource), width: 28))
+        topBar.addArrangedSubview(receiverSourceLabel)
+        topBar.addArrangedSubview(receiverSourceNextButton)
         receiverConnectButton = NSButton(title: "Connect", target: self, action: #selector(toggleReceiver))
-        toolbar.addArrangedSubview(receiverConnectButton)
-
+        topBar.addArrangedSubview(receiverConnectButton)
         receiverStatusLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         receiverStatusLabel.lineBreakMode = .byTruncatingTail
-        toolbar.addArrangedSubview(receiverStatusLabel)
+        topBar.addArrangedSubview(receiverStatusLabel)
 
+        let bottomBar = row()
+        bottomBar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 8, right: 10)
         receiverRecordButton = NSButton(title: "REC", target: self, action: #selector(toggleReceiverRecording))
         receiverTimerLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         receiverErrorLabel.textColor = .systemRed
         receiverErrorLabel.lineBreakMode = .byTruncatingMiddle
-        toolbar.addArrangedSubview(receiverRecordButton)
-        toolbar.addArrangedSubview(receiverTimerLabel)
-        toolbar.addArrangedSubview(receiverErrorLabel)
+        bottomBar.addArrangedSubview(receiverRecordButton)
+        bottomBar.addArrangedSubview(receiverTimerLabel)
+        let slateLabel = NSTextField(labelWithString: "Slate")
+        slateLabel.textColor = .secondaryLabelColor
+        slateLabel.font = .systemFont(ofSize: 11)
+        bottomBar.addArrangedSubview(slateLabel)
+        receiverSlateField.target = self
+        receiverSlateField.action = #selector(receiverSlateEdited)
+        receiverSlateField.isContinuous = false
+        receiverSlateField.placeholderString = "e.g. S14T3"
+        receiverSlateField.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        bottomBar.addArrangedSubview(receiverSlateField)
+        receiverAutoRecordCheckbox = NSButton(checkboxWithTitle: "Auto-record", target: self, action: #selector(receiverAutoRecordChanged))
+        bottomBar.addArrangedSubview(receiverAutoRecordCheckbox)
+        bottomBar.addArrangedSubview(receiverErrorLabel)
+        receiverFolderButton = button("Folder", action: #selector(revealRecordings), width: 64)
+        bottomBar.addArrangedSubview(receiverFolderButton)
+        receiverLockButton = button("🔓", action: #selector(toggleReceiverLock), width: 44)
+        bottomBar.addArrangedSubview(receiverLockButton)
 
         let display = DisplayLayerHostNSView(frame: NSRect(x: 0, y: 0, width: 800, height: 450))
         display.attach(displayLayer: receiverModel.displayLayer)
         display.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
         display.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
 
-        root.addArrangedSubview(toolbar)
+        root.addArrangedSubview(topBar)
+        root.addArrangedSubview(bottomBar)
         root.addArrangedSubview(display)
-        receiverWindow = makeWindow(title: "NDIStream - Receiver", content: root, size: NSSize(width: 800, height: 500))
+        receiverWindow = makeWindow(title: "NDIStream - Receiver", content: root, size: NSSize(width: 820, height: 540))
         receiverWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         receiverWindow.level = .floating
     }
@@ -393,20 +442,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateSenderUI() {
         cameraLabel.stringValue = selectedCameraName
         sourceNameField.stringValue = senderController.sourceName
+        if senderSlateField.stringValue != senderController.slate {
+            senderSlateField.stringValue = senderController.slate
+        }
         qualityControl.selectedSegment = QualityPreset.allCases.firstIndex(of: senderController.quality) ?? 0
         fpsControl.selectedSegment = senderController.targetFPS == 60 ? 1 : 0
         pixelFormatControl.selectedSegment = CapturePixelFormat.allCases.firstIndex(of: senderController.pixelFormat) ?? 0
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
-        pacingCheckbox.isEnabled = !senderController.lowestLatency
         lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
         lowestLatencyPendingLabel.isHidden = !senderController.lowestLatencyRelaunchRequired
-        sourceNameField.isEnabled = !senderController.isBroadcasting
-        senderRecordButton.isEnabled = senderController.isBroadcasting
+        senderAutoRecordCheckbox.state = senderController.autoRecord ? .on : .off
+
+        let locked = senderController.isLocked
+        senderCameraPrevButton.isEnabled = !locked
+        senderCameraNextButton.isEnabled = !locked
+        sourceNameField.isEnabled = !locked && !senderController.isBroadcasting
+        senderSlateField.isEnabled = !locked
+        qualityControl.isEnabled = !locked
+        fpsControl.isEnabled = !locked
+        pixelFormatControl.isEnabled = !locked
+        pacingCheckbox.isEnabled = !locked && !senderController.lowestLatency
+        lowestLatencyCheckbox.isEnabled = !locked
+        senderAutoRecordCheckbox.isEnabled = !locked
+        senderRecordButton.isEnabled = !locked && senderController.isBroadcasting
         senderRecordButton.title = senderController.recorder.isRecording ? "STOP REC" : "REC"
         senderTimerLabel.stringValue = formatElapsed(senderController.recorder.elapsed)
         senderErrorLabel.stringValue = senderController.recorder.lastError ?? ""
-        broadcastButton.isEnabled = !senderController.isTransitioning && !senderController.availableCameras.isEmpty
+        broadcastButton.isEnabled = !locked && !senderController.isTransitioning && !senderController.availableCameras.isEmpty
         broadcastButton.title = senderController.isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"
+        senderLockButton.title = locked ? "🔒" : "🔓"
+        senderLockButton.toolTip = locked ? "Unlock controls" : "Lock controls (prevents accidental clicks)"
         senderStatusLabel.stringValue = senderStatusText
         senderStatusDot.layer?.backgroundColor = senderStatusColor.cgColor
         updateStatusMenu()
@@ -415,12 +480,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateReceiverUI() {
         receiverSourceLabel.stringValue = selectedSourceLabel
         receiverConnectButton.title = receiverModel.isConnected ? "Disconnect" : "Connect"
-        receiverConnectButton.isEnabled = receiverModel.isConnected || receiverModel.availableSources.contains(where: { $0.name == receiverModel.selectedSourceName })
+        let sourceOnline = receiverModel.availableSources.contains(where: { $0.name == receiverModel.selectedSourceName })
         receiverStatusLabel.stringValue = receiverModel.statusLine
-        receiverRecordButton.isEnabled = receiverModel.isConnected
+        if receiverSlateField.stringValue != receiverModel.slate {
+            receiverSlateField.stringValue = receiverModel.slate
+        }
+        receiverAutoRecordCheckbox.state = receiverModel.autoRecord ? .on : .off
+
+        let locked = receiverModel.isLocked
+        receiverSourcePrevButton.isEnabled = !locked && !receiverModel.isConnected
+        receiverSourceNextButton.isEnabled = !locked && !receiverModel.isConnected
+        receiverConnectButton.isEnabled = !locked && (receiverModel.isConnected || sourceOnline)
+        receiverSlateField.isEnabled = !locked
+        receiverAutoRecordCheckbox.isEnabled = !locked
+        receiverRecordButton.isEnabled = !locked && receiverModel.isConnected
         receiverRecordButton.title = receiverModel.recorder.isRecording ? "STOP REC" : "REC"
         receiverTimerLabel.stringValue = formatElapsed(receiverModel.recorder.elapsed)
         receiverErrorLabel.stringValue = receiverModel.recorder.lastError ?? ""
+        receiverLockButton.title = locked ? "🔒" : "🔓"
+        receiverLockButton.toolTip = locked ? "Unlock controls" : "Lock controls (prevents accidental clicks)"
         updateStatusMenu()
     }
 
@@ -450,7 +528,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toggleBroadcast()
         DebugLog.write("status item toggle broadcast")
     }
-    @objc private func toggleSenderRecording() { senderController.recorder.isRecording ? senderController.recorder.stop() : senderController.recorder.start() }
+    @objc private func toggleSenderRecording() {
+        if senderController.recorder.isRecording {
+            senderController.recorder.stop()
+        } else {
+            senderController.recorder.start(slate: senderController.slate)
+        }
+    }
+    @objc private func senderSlateEdited() { senderController.slate = senderSlateField.stringValue }
+    @objc private func senderAutoRecordChanged() { senderController.autoRecord = senderAutoRecordCheckbox.state == .on }
+    @objc private func toggleSenderLock() {
+        senderController.isLocked.toggle()
+        DebugLog.write("sender lock=\(senderController.isLocked)")
+    }
     @objc private func revealRecordings() { Recorder.revealRecordingsFolder() }
     @objc private func openLog() { NSWorkspace.shared.open(DebugLog.url) }
     @objc private func showSenderWindow() {
@@ -477,7 +567,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toggleReceiver()
         DebugLog.write("status item toggle receiver")
     }
-    @objc private func toggleReceiverRecording() { receiverModel.recorder.isRecording ? receiverModel.recorder.stop() : receiverModel.recorder.start() }
+    @objc private func toggleReceiverRecording() {
+        if receiverModel.recorder.isRecording {
+            receiverModel.recorder.stop()
+        } else {
+            receiverModel.recorder.start(slate: receiverModel.slate)
+        }
+    }
+    @objc private func receiverSlateEdited() { receiverModel.slate = receiverSlateField.stringValue }
+    @objc private func receiverAutoRecordChanged() { receiverModel.autoRecord = receiverAutoRecordCheckbox.state == .on }
+    @objc private func toggleReceiverLock() {
+        receiverModel.isLocked.toggle()
+        DebugLog.write("receiver lock=\(receiverModel.isLocked)")
+    }
 
     private func selectCamera(offset: Int) {
         let cameras = senderController.availableCameras
