@@ -42,6 +42,7 @@ final class ReceiverModel: NSObject, ObservableObject {
     private let finder: NDIFinder?
     private var receiver: NDIReceiver?
     private var receivedFrameCount = 0
+    private var hasPerformedInitialAutoselect = false
 
     override init() {
         DebugLog.write("ReceiverModel.init")
@@ -64,9 +65,14 @@ final class ReceiverModel: NSObject, ObservableObject {
             Task { @MainActor in
                 self.availableSources = sources.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                 DebugLog.write("receiver sources changed count=\(self.availableSources.count) names=\(self.availableSources.map { $0.name })")
-                if self.selectedSourceName.isEmpty, let first = self.availableSources.first {
-                    self.selectedSourceName = first.name
-                    DebugLog.write("receiver selected first source=\(first.name)")
+                if !self.hasPerformedInitialAutoselect, !self.availableSources.isEmpty, !self.isConnected {
+                    self.hasPerformedInitialAutoselect = true
+                    let savedMatches = self.availableSources.contains(where: { $0.name == self.selectedSourceName })
+                    if !savedMatches, let first = self.availableSources.first {
+                        let was = self.selectedSourceName
+                        self.selectedSourceName = first.name
+                        DebugLog.write("receiver auto-selected source=\(first.name) (saved='\(was)')")
+                    }
                 }
             }
         }

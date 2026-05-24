@@ -146,6 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pacingCheckbox = NSButton()
     private var lowestLatencyCheckbox = NSButton()
     private var lowestLatencyPendingLabel = NSTextField(labelWithString: "Pending relaunch")
+    private var advancedContainer = NSStackView()
+    private var advancedDisclosureButton = NSButton()
     private var senderRecordButton = NSButton()
     private var senderTimerLabel = NSTextField(labelWithString: "00:00")
     private var senderErrorLabel = NSTextField(labelWithString: "")
@@ -273,8 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let content = NSStackView()
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 14
-        content.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        content.spacing = 10
+        content.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
 
         content.addArrangedSubview(sectionLabel("Camera"))
         let cameraRow = row()
@@ -322,24 +324,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preview.heightAnchor.constraint(equalToConstant: 225).isActive = true
         content.addArrangedSubview(preview)
 
+        advancedContainer.orientation = .vertical
+        advancedContainer.alignment = .leading
+        advancedContainer.spacing = 8
+        advancedContainer.isHidden = true
+
         qualityControl = NSSegmentedControl(labels: QualityPreset.allCases.map(\.label), trackingMode: .selectOne, target: self, action: #selector(qualityChanged))
-        content.addArrangedSubview(labeledRow("Quality", qualityControl))
+        advancedContainer.addArrangedSubview(labeledRow("Quality", qualityControl))
 
         fpsControl = NSSegmentedControl(labels: ["30", "60"], trackingMode: .selectOne, target: self, action: #selector(fpsChanged))
-        content.addArrangedSubview(labeledRow("Frame rate", fpsControl))
+        advancedContainer.addArrangedSubview(labeledRow("Frame rate", fpsControl))
 
         pixelFormatControl = NSSegmentedControl(labels: CapturePixelFormat.allCases.map(\.label), trackingMode: .selectOne, target: self, action: #selector(pixelFormatChanged))
-        content.addArrangedSubview(labeledRow("Format", pixelFormatControl))
+        advancedContainer.addArrangedSubview(labeledRow("Format", pixelFormatControl))
 
         pacingCheckbox = NSButton(checkboxWithTitle: "Smooth pacing (+1 frame latency)", target: self, action: #selector(pacingChanged))
-        content.addArrangedSubview(pacingCheckbox)
+        advancedContainer.addArrangedSubview(pacingCheckbox)
 
         lowestLatencyCheckbox = NSButton(checkboxWithTitle: "Lowest latency (unicast UDP, no RUDP; relaunch to apply)", target: self, action: #selector(lowestLatencyChanged))
-        content.addArrangedSubview(lowestLatencyCheckbox)
+        advancedContainer.addArrangedSubview(lowestLatencyCheckbox)
         lowestLatencyPendingLabel.textColor = .systemOrange
         lowestLatencyPendingLabel.font = .systemFont(ofSize: 11)
         lowestLatencyPendingLabel.isHidden = true
-        content.addArrangedSubview(lowestLatencyPendingLabel)
+        advancedContainer.addArrangedSubview(lowestLatencyPendingLabel)
+
+        advancedDisclosureButton.title = "▸  Advanced (quality, frame rate, latency)"
+        advancedDisclosureButton.bezelStyle = .inline
+        advancedDisclosureButton.setButtonType(.toggle)
+        advancedDisclosureButton.target = self
+        advancedDisclosureButton.action = #selector(toggleAdvanced)
+        advancedDisclosureButton.contentTintColor = .secondaryLabelColor
+        advancedDisclosureButton.font = .systemFont(ofSize: 11)
+        content.addArrangedSubview(advancedDisclosureButton)
+        content.addArrangedSubview(advancedContainer)
 
         senderAutoRecordCheckbox = NSButton(checkboxWithTitle: "Auto-record when broadcasting starts", target: self, action: #selector(senderAutoRecordChanged))
         content.addArrangedSubview(senderAutoRecordCheckbox)
@@ -360,13 +377,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordRow.addArrangedSubview(senderLockButton)
         content.addArrangedSubview(recordRow)
 
-        logPathLabel.stringValue = DebugLog.url.path
-        logPathLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        logPathLabel.textColor = .secondaryLabelColor
-        logPathLabel.lineBreakMode = .byTruncatingMiddle
-        logPathLabel.widthAnchor.constraint(equalToConstant: 400).isActive = true
-        content.addArrangedSubview(logPathLabel)
-
         broadcastButton = NSButton(title: "Start Broadcasting", target: self, action: #selector(toggleBroadcast))
         broadcastButton.bezelStyle = .rounded
         broadcastButton.widthAnchor.constraint(equalToConstant: 400).isActive = true
@@ -383,8 +393,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusRow.addArrangedSubview(senderStatusLabel)
         content.addArrangedSubview(statusRow)
 
-        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 880))
+        senderWindow = makeWindow(title: "NDIStream - Sender", content: content, size: NSSize(width: 440, height: 640))
         senderWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        resizeSenderWindowToFitContent(animate: false)
     }
 
     private func buildReceiverWindow() {
@@ -624,6 +635,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleSenderLock() {
         senderController.isLocked.toggle()
         DebugLog.write("sender lock=\(senderController.isLocked)")
+    }
+
+    @objc private func toggleAdvanced() {
+        let expanding = advancedDisclosureButton.state == .on
+        advancedContainer.isHidden = !expanding
+        advancedDisclosureButton.title = expanding
+            ? "▾  Advanced (quality, frame rate, latency)"
+            : "▸  Advanced (quality, frame rate, latency)"
+        resizeSenderWindowToFitContent(animate: true)
+        DebugLog.write("advanced expanded=\(expanding)")
+    }
+
+    private func resizeSenderWindowToFitContent(animate: Bool) {
+        guard let window = senderWindow, let view = window.contentView else { return }
+        view.layoutSubtreeIfNeeded()
+        let target = view.fittingSize
+        var frame = window.frame
+        let currentContentHeight = window.contentRect(forFrameRect: frame).height
+        let delta = target.height - currentContentHeight
+        guard abs(delta) > 0.5 else { return }
+        frame.size.height += delta
+        frame.origin.y -= delta
+        window.setFrame(frame, display: true, animate: animate)
     }
     @objc private func revealRecordings() { Recorder.revealRecordingsFolder() }
     @objc private func openLog() { NSWorkspace.shared.open(DebugLog.url) }

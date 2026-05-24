@@ -172,6 +172,9 @@ static void NDIReceiverDebugLog(NSString *message) {
     BOOL supported = NO;
     switch (video->FourCC) {
         case NDIlib_FourCC_video_type_UYVY:
+        case NDIlib_FourCC_video_type_UYVA:
+            // UYVA = UYVY + a trailing alpha plane. We ignore alpha and treat
+            // the leading UYVY plane (stride * height bytes) as a normal UYVY frame.
             cvPixelFormat = kCVPixelFormatType_422YpCbCr8;
             supported = YES;
             break;
