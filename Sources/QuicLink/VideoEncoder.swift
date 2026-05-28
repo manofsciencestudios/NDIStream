@@ -11,13 +11,14 @@ final class VideoEncoder {
         let formatDescription: CMFormatDescription
     }
 
+    /// Invoked synchronously on the thread that calls `encode(_:pts:)` (the encoder
+    /// drains via `CompleteFrames` before `encode` returns). A future streaming path
+    /// that removes that drain will change this contract to a VideoToolbox queue.
     var onEncodedFrame: ((EncodedFrame) -> Void)?
 
     private var session: VTCompressionSession?
-    private let codec: QLCodec
 
     init?(width: Int, height: Int, codec: QLCodec, fps: Int, bitrate: Int) {
-        self.codec = codec
         let codecType: CMVideoCodecType = (codec == .hevc) ? kCMVideoCodecType_HEVC
                                                            : kCMVideoCodecType_H264
         var session: VTCompressionSession?

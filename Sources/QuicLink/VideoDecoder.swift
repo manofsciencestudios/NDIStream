@@ -4,6 +4,8 @@ import Foundation
 import VideoToolbox
 
 final class VideoDecoder {
+    /// Invoked synchronously on the thread that calls `decode(_:pts:isKeyframe:)`
+    /// (decode runs synchronously). A future async-decode path will change this.
     var onDecodedFrame: ((CVPixelBuffer, CMTime) -> Void)?
 
     private var session: VTDecompressionSession?
@@ -27,6 +29,8 @@ final class VideoDecoder {
     }
 
     func decode(_ data: Data, pts: CMTime, isKeyframe: Bool) {
+        // All-intra stream: every frame is independently decodable, so `isKeyframe`
+        // is informational only today (kept for wire symmetry / future P-frames).
         guard let session,
               let sampleBuffer = Self.makeSampleBuffer(data: data, pts: pts,
                                                        formatDescription: formatDescription)
