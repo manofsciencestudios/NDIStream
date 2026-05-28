@@ -1,4 +1,4 @@
-# QuicLink: a custom low-bandwidth transport alongside NDI
+# QuicLink: a loss-resilient transport alongside NDI
 
 **Date:** 2026-05-28
 **Status:** Design approved, pending spec review
@@ -8,17 +8,40 @@
 
 Add a second, optional video/audio transport to NDIStream that the user can switch
 to instead of NDI. It targets the app's core use case — NDIStream sending to
-NDIStream over a small/constrained LAN (e.g. a GL.iNet travel router on a film set).
+NDIStream over an RF-hostile LAN (e.g. a GL.iNet travel router on a film set).
 
 NDI stays in the app unchanged. QuicLink is additive: a toggle, not a replacement.
 The user keeps NDI for interop (OBS, vMix, Resolume) and as the battle-tested
-fallback; QuicLink is chosen when both ends are NDIStream and bandwidth matters.
+fallback; QuicLink is chosen when both ends are NDIStream.
+
+## The problem it exists to solve
+
+On a 2026 film job, NDI's failure mode was the dealbreaker — **not** bandwidth.
+Running already at reduced quality (720p/540p) over wireless, a *single* dropped
+frame on the congested set would cause NDI to freeze the entire image for **2–5
+seconds**, then resume perfectly smooth — over and over. NDI's reliable transport
+responds to packet loss by stalling to retransmit (head-of-line blocking) instead
+of skipping ahead to live.
+
+A film set is one of the most RF-hostile environments there is (comms, wireless
+monitors, lav packs, phones — all contending for airtime), so packet loss is
+**frequent and unavoidable**, even at low bitrate. The user's explicit tolerance:
+losing a frame or two is fine; a multi-second freeze is not.
+
+**The #1 design principle is therefore: timeliness over reliability — drop, never
+stall.** Nothing in the pipeline ever waits for old data. This is the primary reason
+QuicLink exists; everything else is secondary.
 
 ### Why it beats NDI for this use case
 
-- **Bandwidth:** NDI's SpeedHQ is intraframe-only (~100–125 Mbps @ 1080p).
-  Low-latency HEVC at equivalent perceptual quality is roughly 5–10× lower
-  (single-digit-to-teens Mbps). Decisive on a constrained router.
+- **Loss resilience (the headline).** Stream-per-frame + a hard-deadline jitter
+  buffer + an all-intra codec mean a lost frame costs exactly *that one frame* — the
+  next frame paints normally. The multi-second freeze is *structurally impossible*
+  because nothing waits for retransmission. NDI exposes no knob to get this behavior.
+- **Bandwidth.** NDI's SpeedHQ is intraframe-only (~100–125 Mbps @ 1080p). All-intra
+  HEVC at equivalent quality is meaningfully lower — roughly **2–3× less** (HEVC-intra
+  beats SpeedHQ, but we forgo P-frame savings to keep frames independent; see GOP
+  decision). Lower bitrate also means fewer packets exposed to RF loss.
 - **No proprietary dependency:** removes `libndi.dylib`, the
   `disable-library-validation` entitlement, and the bundling step (for this path).
 - **Encrypted by default:** QUIC mandates TLS 1.3; NDI is plaintext unless you pay
@@ -37,8 +60,10 @@ fallback; QuicLink is chosen when both ends are NDIStream and bandwidth matters.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Transport | QUIC via Network.framework | Congestion control + loss recovery + multiplexed streams + mandatory TLS, all built in. Available since macOS 12; our target is macOS 13. |
-| Codec | HEVC, H.264 fallback | HEVC ≈ half the bitrate. One codec per sender, chosen as the **lowest common denominator** across all connected receivers (HEVC only if every current receiver can decode it, else H.264). Preserves encode-once fan-out. |
-| Media-over-QUIC mapping | **A: stream-per-frame** now; datagrams (C) as a later "lossy-network" mode | Stream-per-frame isolates slow/lost frames (no head-of-line blocking between frames) while QUIC still handles loss/congestion. Datagrams lower latency under loss but require app-owned FEC; deferred. |
+| Codec | HEVC, H.264 fallback | One codec per sender, chosen as the **lowest common denominator** across all connected receivers (HEVC only if every current receiver can decode it, else H.264). Preserves encode-once fan-out. |
+| GOP structure | **All-intra** (every frame a keyframe) | Honors drop-never-stall: a dropped frame costs exactly one frame, never a freeze-until-keyframe. Rejected: interframe P-frames (smaller, but a dropped P-frame corrupts until the next keyframe — reintroduces the freeze). Rejected: dynamic-GOP "harden on loss" (unpredictable to tune). |
+| Degradation under stress | **Congestion-adaptive bitrate/quality** | When QUIC signals congestion (rising RTT, loss, send-queue growth), lower the encoder bitrate (and resolution if needed), raise it back on recovery. Stays all-intra throughout. Picture softens gracefully instead of freezing — the "easy, predictable" half of adaptive, without switching codec structure. |
+| Media-over-QUIC mapping | **A: stream-per-frame** now; datagrams + FEC (C) as **phase 2** | Stream-per-frame isolates slow/lost frames (no head-of-line blocking between frames). Phase 2 (QUIC unreliable datagrams + forward error correction) is the named next step for the harshest RF sets: it recovers lost packets *without* waiting for retransmit, reducing dropped-frame count, and sidesteps congestion-control over-throttling. Not required to eliminate the freeze (v1 already does), only to improve smoothness under heavy loss. |
 | Audio | PCM (planar float) for v1 | Zero codec latency; ~3 Mbps stereo is trivial on LAN. Reuses the planar-float conversion the NDI sender already does. AAC is a later bandwidth option. |
 | Multi-receiver | In scope | NWListener accepts multiple connections; encode once, fan encoded frames out to all. Matches NDI behavior, cheap to add. |
 | Recording | Unchanged | Receiver decodes to a pixel buffer before delivery, so the existing recorder/display paths are untouched. Direct HEVC→.mov remux is a future optimization. |
@@ -80,14 +105,16 @@ display layer (`AVSampleBufferDisplayLayer`) and `Recorder` paths require no cha
 
 1. **Encode** — `VTCompressionSession` → HEVC, or H.264 if *any* currently connected
    receiver lacks HEVC decode (lowest common denominator). A receiver that connects or
-   drops can change the LCD, triggering a codec switch + forced keyframe. Low-latency
-   config:
+   drops can change the LCD, triggering a codec switch. Low-latency, all-intra config:
    - `kVTCompressionPropertyKey_RealTime = true`
    - `kVTCompressionPropertyKey_AllowFrameReordering = false` (no B-frames)
+   - `kVTCompressionPropertyKey_MaxKeyFrameInterval = 1` (**all-intra** — every frame
+     is a keyframe, so any frame is independently decodable and join-in-progress is
+     instant)
    - `kVTVideoEncoderSpecification_EnableLowLatencyRateControl` where available
    - `kVTCompressionPropertyKey_ExpectedFrameRate`
-   - `kVTCompressionPropertyKey_MaxKeyFrameInterval` ~1–2s, **plus a forced keyframe
-     whenever a new receiver connects** (instant join-in-progress).
+   - `kVTCompressionPropertyKey_AverageBitRate` — adjusted live for
+     congestion-adaptive degradation (see Reliability).
 2. **Packetize** — pull NAL units + parameter sets (HEVC VPS/SPS/PPS; H.264 SPS/PPS)
    from the encoded `CMSampleBuffer`; prepend a small header (frame type, pts, length).
 3. **Send** — open one QUIC stream per frame (Approach A); fan the same encoded frame
@@ -120,11 +147,22 @@ This is a minimized WebRTC-style offer/answer for a two-party LAN.
 
 ### Reliability & reconnect
 
-- QUIC provides congestion control and loss recovery for free.
-- Heartbeats on the control stream detect a dead peer.
-- The receiver retains the resolved Bonjour endpoint and auto-reconnects, reusing the
-  existing `receiverDidStall` / `receiverDidResume` UI states.
-- Stream-per-frame means a stalled frame is abandoned, never propagated to later frames.
+**Drop, never stall** is the governing rule here.
+
+- **Hard-deadline jitter buffer.** Each frame carries a pts; the receiver holds a small,
+  bounded playout buffer (absorbs jitter) and assigns each frame a deadline. A frame
+  that misses its deadline is *dropped* and playback advances — the receiver never waits
+  seconds for a late frame. With all-intra, the next frame decodes standalone, so a drop
+  costs exactly one frame. This is the structural reason the NDI freeze cannot occur.
+- **Stream-per-frame** means a stalled frame is abandoned, never propagated to later
+  frames (no cross-frame head-of-line blocking).
+- **Congestion-adaptive bitrate.** The sender watches QUIC's congestion signals (RTT
+  trend, loss, send-queue depth) and lowers the encoder bitrate — and resolution if
+  needed — under stress, raising it back on recovery. Degradation is a softer picture,
+  never a freeze.
+- QUIC provides congestion control and loss recovery for free; heartbeats on the control
+  stream detect a dead peer; the receiver retains the resolved Bonjour endpoint and
+  auto-reconnects, reusing the existing `receiverDidStall` / `receiverDidResume` UI states.
 
 ### UI
 
@@ -157,6 +195,10 @@ alongside the existing settings.
    with separate streams + app-level pacing.
 4. **HEVC encode floor.** Hardware HEVC *encode* needs Kaby Lake+ / Apple Silicon;
    *decode* is ~universal since 2017. Fallback to H.264 keys off the encoder side.
+5. **Congestion control vs. RF loss.** QUIC's congestion controller may mistake
+   wireless-interference loss for bandwidth congestion and throttle bitrate more than
+   necessary (a softer picture, never a freeze). If significant, the phase-2
+   datagram+FEC path bypasses loss-based throttling. Measure on a real congested set.
 
 ## Testing
 
@@ -170,7 +212,12 @@ alongside the existing settings.
 
 ## Out of scope (v1)
 
-- QUIC datagram / FEC "lossy-network" mode (designed-for, deferred).
+- QUIC datagram + FEC "harsh-RF" mode — **phase 2**, the named next step if v1's
+  drop-don't-stall still leaves too many visible dropped frames on the worst sets.
 - Direct HEVC→.mov remux on record (decode-then-existing-path for now).
 - AAC audio (PCM for now).
-- Interop with non-NDIStream tools.
+- Direct interop with non-NDIStream tools. (Note: a receiver-side **virtual camera**
+  output — letting OBS/Zoom/etc. pick up any received source as a system camera, via a
+  `CMIOExtension` Camera Extension — is the **planned next initiative after QuicLink**.
+  It is orthogonal to the transport (works for any received source, NDI or QuicLink) and
+  gets its own spec rather than being folded in here.)
