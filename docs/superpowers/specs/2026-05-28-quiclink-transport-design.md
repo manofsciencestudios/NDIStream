@@ -1,0 +1,176 @@
+# QuicLink: a custom low-bandwidth transport alongside NDI
+
+**Date:** 2026-05-28
+**Status:** Design approved, pending spec review
+**Codename:** "QuicLink" (UI label TBD — likely a "NDI / Direct" toggle)
+
+## Goal
+
+Add a second, optional video/audio transport to NDIStream that the user can switch
+to instead of NDI. It targets the app's core use case — NDIStream sending to
+NDIStream over a small/constrained LAN (e.g. a GL.iNet travel router on a film set).
+
+NDI stays in the app unchanged. QuicLink is additive: a toggle, not a replacement.
+The user keeps NDI for interop (OBS, vMix, Resolume) and as the battle-tested
+fallback; QuicLink is chosen when both ends are NDIStream and bandwidth matters.
+
+### Why it beats NDI for this use case
+
+- **Bandwidth:** NDI's SpeedHQ is intraframe-only (~100–125 Mbps @ 1080p).
+  Low-latency HEVC at equivalent perceptual quality is roughly 5–10× lower
+  (single-digit-to-teens Mbps). Decisive on a constrained router.
+- **No proprietary dependency:** removes `libndi.dylib`, the
+  `disable-library-validation` entitlement, and the bundling step (for this path).
+- **Encrypted by default:** QUIC mandates TLS 1.3; NDI is plaintext unless you pay
+  for the enterprise tier.
+
+### Where it does not beat NDI (explicit non-goals)
+
+- **Not lower latency.** NDI's intraframe pipeline is already near-optimal
+  (~one frame). HEVC encode + decode + jitter buffer will be *comparable* (tens of
+  ms), possibly a hair higher. We match NDI here; we do not beat it.
+- **Not interoperable.** QuicLink talks only to NDIStream. Anything needing OBS/vMix
+  uses the NDI toggle. This is intentional.
+
+## Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Transport | QUIC via Network.framework | Congestion control + loss recovery + multiplexed streams + mandatory TLS, all built in. Available since macOS 12; our target is macOS 13. |
+| Codec | HEVC, H.264 fallback | HEVC ≈ half the bitrate. One codec per sender, chosen as the **lowest common denominator** across all connected receivers (HEVC only if every current receiver can decode it, else H.264). Preserves encode-once fan-out. |
+| Media-over-QUIC mapping | **A: stream-per-frame** now; datagrams (C) as a later "lossy-network" mode | Stream-per-frame isolates slow/lost frames (no head-of-line blocking between frames) while QUIC still handles loss/congestion. Datagrams lower latency under loss but require app-owned FEC; deferred. |
+| Audio | PCM (planar float) for v1 | Zero codec latency; ~3 Mbps stereo is trivial on LAN. Reuses the planar-float conversion the NDI sender already does. AAC is a later bandwidth option. |
+| Multi-receiver | In scope | NWListener accepts multiple connections; encode once, fan encoded frames out to all. Matches NDI behavior, cheap to add. |
+| Recording | Unchanged | Receiver decodes to a pixel buffer before delivery, so the existing recorder/display paths are untouched. Direct HEVC→.mov remux is a future optimization. |
+
+## Architecture
+
+### The abstraction seam
+
+NDIStream's three ObjC classes already define the right boundary. Introduce three
+Swift protocols; make both the NDI backend and the QuicLink backend conform.
+
+- `VideoSender`
+  - `init?(sourceName: String)`
+  - `send(pixelBuffer:frameRateN:frameRateD:)`
+  - `sendAudio(_ sampleBuffer: CMSampleBuffer)`
+  - `stop()`
+  - Mirrors the existing `NDISender` interface.
+- `VideoReceiver` + `VideoReceiverDelegate`
+  - Delegate delivers a **decoded, pixel-buffer-backed `CMSampleBuffer`** plus
+    width/height/frameRate/fourCC, identical to `NDIReceiverDelegate`.
+  - Also: `receiverDidDisconnect`, `receiverDidStallForSeconds:`, `receiverDidResume`,
+    `receiverDidReceiveAudio:...`.
+- `SourceFinder`
+  - `onSourcesChanged: ([FoundSource]) -> Void`, `currentSources()`.
+  - `FoundSource` carries `name`, `address`, and a `transport` tag (`.ndi` / `.quicLink`).
+
+`BroadcastController` and `ReceiverModel` gain a `transport` selector and instantiate
+the matching backend. Because the QuicLink receiver decodes before delivering, the
+display layer (`AVSampleBufferDisplayLayer`) and `Recorder` paths require no changes.
+
+### Roles
+
+- **Sender = QUIC server** (`NWListener`), advertises over Bonjour.
+- **Receiver = QUIC client** (`NWConnectionGroup` over `NWMultiplexGroup`), connects in.
+
+### Sender pipeline (QuicLink)
+
+`CameraManager` already emits `CVPixelBuffer`s. New chain:
+
+1. **Encode** — `VTCompressionSession` → HEVC, or H.264 if *any* currently connected
+   receiver lacks HEVC decode (lowest common denominator). A receiver that connects or
+   drops can change the LCD, triggering a codec switch + forced keyframe. Low-latency
+   config:
+   - `kVTCompressionPropertyKey_RealTime = true`
+   - `kVTCompressionPropertyKey_AllowFrameReordering = false` (no B-frames)
+   - `kVTVideoEncoderSpecification_EnableLowLatencyRateControl` where available
+   - `kVTCompressionPropertyKey_ExpectedFrameRate`
+   - `kVTCompressionPropertyKey_MaxKeyFrameInterval` ~1–2s, **plus a forced keyframe
+     whenever a new receiver connects** (instant join-in-progress).
+2. **Packetize** — pull NAL units + parameter sets (HEVC VPS/SPS/PPS; H.264 SPS/PPS)
+   from the encoded `CMSampleBuffer`; prepend a small header (frame type, pts, length).
+3. **Send** — open one QUIC stream per frame (Approach A); fan the same encoded frame
+   out to all connected receivers (encode once).
+4. **Audio** — reuse the sender's existing planar-float conversion; send PCM on its
+   own stream.
+
+### Receiver pipeline (QuicLink)
+
+1. **Discover** — `NWBrowser` on the Bonjour service type (e.g. `_ndistream._udp`) →
+   `SourceFinder` list, merged in the UI with NDI sources, tagged by transport.
+2. **Connect** — open the **control stream**; send capabilities (HEVC decode via
+   `VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)`, max resolution); receive the
+   chosen codec + dimensions + frame rate + parameter sets.
+3. **Decode** — build a `VTDecompressionSession` from the parameter sets; reassemble
+   each frame stream → decode → pixel-buffer-backed `CMSampleBuffer` → hand to the
+   **existing delegate**. Display + recording unchanged.
+4. **Jitter buffer** — small playout buffer ordered by pts; drop frames past deadline.
+
+### Handshake & negotiation
+
+A single control stream, opened by the receiver right after connect:
+
+1. receiver → sender: capabilities (HEVC-decode yes/no, max resolution).
+2. sender → receiver: chosen codec, dimensions, frame rate, parameter sets.
+3. sender forces a keyframe.
+4. Thereafter the control stream also carries tally and heartbeats.
+
+This is a minimized WebRTC-style offer/answer for a two-party LAN.
+
+### Reliability & reconnect
+
+- QUIC provides congestion control and loss recovery for free.
+- Heartbeats on the control stream detect a dead peer.
+- The receiver retains the resolved Bonjour endpoint and auto-reconnects, reusing the
+  existing `receiverDidStall` / `receiverDidResume` UI states.
+- Stream-per-frame means a stalled frame is abandoned, never propagated to later frames.
+
+### UI
+
+A transport toggle ("NDI / Direct") on both Sender and Receiver. The receiver's source
+list shows NDI and QuicLink sources together, tagged. Persisted in UserDefaults
+alongside the existing settings.
+
+## Components (new files, mirroring `Sources/NDI/`)
+
+- `Sources/Transport/VideoTransport.swift` — the three protocols + `FoundSource` + `Transport` enum.
+- `Sources/QuicLink/QuicLinkSender.swift` — `NWListener`, fan-out, control stream.
+- `Sources/QuicLink/QuicLinkReceiver.swift` — `NWConnectionGroup`, jitter buffer, decode.
+- `Sources/QuicLink/QuicLinkFinder.swift` — `NWBrowser` / `NWListener` advertise.
+- `Sources/QuicLink/VideoEncoder.swift` — `VTCompressionSession` wrapper.
+- `Sources/QuicLink/VideoDecoder.swift` — `VTDecompressionSession` wrapper.
+- `Sources/QuicLink/FrameProtocol.swift` — wire framing, headers, parameter-set carriage.
+- `Sources/QuicLink/QuicTLS.swift` — self-signed identity generation + pinning.
+- NDI backends get thin conformances to the new protocols (no behavior change).
+
+## Risks / unknowns to resolve in planning (spikes)
+
+1. **Group-wide stream directionality.** Network.framework ties directionality to the
+   whole connection group, not individual streams. May force all-bidirectional streams
+   or two groups (one control, one media). **Spike a stream-model proof before
+   committing.**
+2. **QUIC mandates TLS.** For a LAN peer tool, generate a self-signed identity and pin
+   it via a custom `sec_protocol` verify block — not a real CA. Needs a small trust
+   bootstrap.
+3. **No QUIC-layer stream prioritization.** If audio competes with video, manage it
+   with separate streams + app-level pacing.
+4. **HEVC encode floor.** Hardware HEVC *encode* needs Kaby Lake+ / Apple Silicon;
+   *decode* is ~universal since 2017. Fallback to H.264 keys off the encoder side.
+
+## Testing
+
+- **Unit:** `FrameProtocol` round-trip (packetize → depacketize), capability
+  negotiation logic, jitter-buffer ordering/drop.
+- **Integration (loopback):** sender + receiver in one process over QUIC on localhost;
+  assert frames decode and dimensions/fps match.
+- **Manual on hardware:** two Macs over the travel router — verify discovery, connect,
+  live video, HEVC-vs-H.264 fallback, multi-receiver, reconnect after wifi blip, and
+  measured bandwidth vs NDI for the same scene.
+
+## Out of scope (v1)
+
+- QUIC datagram / FEC "lossy-network" mode (designed-for, deferred).
+- Direct HEVC→.mov remux on record (decode-then-existing-path for now).
+- AAC audio (PCM for now).
+- Interop with non-NDIStream tools.
