@@ -12,7 +12,7 @@ import Network
 /// protocols"). The only supported server->client data path is: the CLIENT opens a
 /// bidirectional stream and the SERVER replies on that same stream. So QuicLink uses a
 /// **client-pull / server-reply** model:
-///   - The receiver keeps a pool of open "frame request" streams.
+///   - The receiver opens "frame request" streams.
 ///   - Each inbound stream sends a 1-byte request; the sender holds it open and, when the
 ///     next encoded frame is ready, replies with the serialized `VideoPacket`
 ///     (`isComplete: true` = one frame = one complete message), then the stream closes.
@@ -28,16 +28,15 @@ final class QuicLinkSender: VideoSender {
     private let tls: QuicTLS
     private let sourceName: String
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "quiclink.sender")
+    private let queue = QuicLinkProtocol.networkQueue
+    private let portLock = NSLock()
+    private var readyPort: UInt16?
 
     /// Inbound request streams awaiting the next frame. Each gets the next encoded packet.
     /// Guarded by `lock`.
     private let lock = NSLock()
+    private var inboundStreams: [NWConnection] = []
     private var waitingStreams: [NWConnection] = []
-    /// Most recent serialized packet. Served immediately to a request that arrives between
-    /// frames; the receiver's JitterBuffer dedupes by pts, so re-serving the same frame to a
-    /// fast poller is harmless. Guarded by `lock`.
-    private var lastFrameData: Data?
     /// Most recent packet, used by `repeatLastFrame`. Guarded by `lock`.
     private var lastPacket: VideoPacket?
 
@@ -48,7 +47,11 @@ final class QuicLinkSender: VideoSender {
     // MARK: - Test-visible accessors (for @testable direct connect)
 
     /// The UDP port the QUIC listener bound to, once ready. nil until `.ready`.
-    var listeningPort: UInt16? { listener.port?.rawValue }
+    var listeningPort: UInt16? {
+        portLock.lock()
+        defer { portLock.unlock() }
+        return readyPort
+    }
 
     /// SHA-256 of the leaf cert DER — the pin a receiver must present in its verify block.
     var pinSHA256: Data { tls.pinSHA256 }
@@ -88,10 +91,11 @@ final class QuicLinkSender: VideoSender {
                                                   txtRecord: txt)
         }
 
-        listener.stateUpdateHandler = { [weak listener] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
             case .ready:
-                NSLog("QuicLinkSender: listener ready on port \(listener?.port?.rawValue ?? 0)")
+                let port = listener?.port?.rawValue
+                self?.setReadyPort(port)
             case .failed(let e):
                 NSLog("QuicLinkSender: listener failed: \(e)")
             default:
@@ -108,30 +112,35 @@ final class QuicLinkSender: VideoSender {
         listener.start(queue: queue)
     }
 
+    private func setReadyPort(_ port: UInt16?) {
+        portLock.lock()
+        readyPort = port
+        portLock.unlock()
+    }
+
     // MARK: - Inbound request handling
 
     private func handleInboundRequest(_ connection: NWConnection) {
-        NSLog("QuicLinkSender: inbound request stream")
+        retainInbound(connection)
         connection.stateUpdateHandler = { [weak self] state in
-            NSLog("QuicLinkSender: inbound stream state: \(state)")
             switch state {
             case .failed, .cancelled:
-                self?.removeWaiting(connection)
+                self?.removeInbound(connection)
             default:
                 break
             }
         }
         connection.start(queue: queue)
-        // Read the (small) request. If a frame is already buffered, serve it immediately
-        // (the receiver dedupes by pts, so a repeat is harmless and keeps latency low even
-        // when the request arrived between encodes). Otherwise enqueue for the next frame.
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16) { [weak self] _, _, _, _ in
+        // Read the request, then hold this stream for the next encoded frame. Immediate
+        // replays are handled only by `repeatLastFrame`; otherwise the jitter buffer dedupes
+        // repeated PTS values and the receiver can appear stalled.
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16) { [weak self] data, _, _, error in
             guard let self else { return }
             self.lock.lock()
-            let buffered = self.lastFrameData
-            if buffered == nil { self.waitingStreams.append(connection) }
+            if error == nil, data?.isEmpty == false {
+                self.waitingStreams.append(connection)
+            }
             self.lock.unlock()
-            if let buffered { self.reply(on: connection, data: buffered) }
         }
     }
 
@@ -140,8 +149,20 @@ final class QuicLinkSender: VideoSender {
         connection.send(content: data, isComplete: true,
                         completion: .contentProcessed { [weak self] _ in
             self?.removeWaiting(connection)
-            connection.cancel()
         })
+    }
+
+    private func retainInbound(_ connection: NWConnection) {
+        lock.lock()
+        inboundStreams.append(connection)
+        lock.unlock()
+    }
+
+    private func removeInbound(_ connection: NWConnection) {
+        lock.lock()
+        inboundStreams.removeAll { $0 === connection }
+        waitingStreams.removeAll { $0 === connection }
+        lock.unlock()
     }
 
     private func removeWaiting(_ connection: NWConnection) {
@@ -192,7 +213,6 @@ final class QuicLinkSender: VideoSender {
         let data = packet.serialize()
         lock.lock()
         lastPacket = packet
-        lastFrameData = data
         let toServe = waitingStreams
         waitingStreams.removeAll()
         lock.unlock()
@@ -219,5 +239,10 @@ final class QuicLinkSender: VideoSender {
         listener.cancel()
         encoder?.invalidate()
         encoder = nil
+        lock.lock()
+        let inbound = inboundStreams
+        inboundStreams.removeAll()
+        lock.unlock()
+        for s in inbound { s.cancel() }
     }
 }

@@ -8,12 +8,9 @@ import VideoToolbox
 ///
 /// ## Stream model (proven in QuicServerStreamSpike)
 /// Network.framework only allows the CLIENT to open QUIC streams; the server replies on
-/// the same stream. So the receiver runs a **request/reply pull pool**: it keeps a small
-/// pool of open streams, each of which sends a 1-byte request and then reads one complete
-/// `VideoPacket` reply (the next encoded frame). When a stream completes, the receiver
-/// immediately opens a replacement, keeping the pipe full so the sender always has a
-/// waiting stream to deliver the next frame on. Each frame on its own stream preserves
-/// drop-don't-stall.
+/// the same stream. So the receiver runs a **request/reply pull loop**: it opens a client
+/// request, sends one byte, reads one `VideoPacket` reply (the next encoded frame), then
+/// opens the next request. Each frame on its own stream preserves drop-don't-stall.
 ///
 /// Parsed packets feed a `JitterBuffer`; a display timer pops ready packets and decodes
 /// them off the network thread. Decoded pixel buffers are wrapped in `CMSampleBuffer`s and
@@ -22,17 +19,18 @@ final class QuicLinkReceiver: VideoReceiver {
 
     weak var delegate: VideoReceiverDelegate?
 
-    /// How many frame-request streams to keep outstanding. A small pool absorbs RTT so the
-    /// sender (almost) always has a waiting stream when it encodes the next frame.
-    private static let poolSize = 4
+    /// One request at a time avoids racing multiple in-process QUIC handshakes on loopback.
+    private static let poolSize = 1
 
     // MARK: - Networking
 
-    private let group: NWConnectionGroup
-    private let netQueue = DispatchQueue(label: "quiclink.receiver.net")
+    private let endpoint: NWEndpoint
+    private let params: NWParameters
+    private let netQueue = QuicLinkProtocol.networkQueue
     /// Single serial queue that owns the jitter buffer + decoder (both single-threaded).
     private let decodeQueue = DispatchQueue(label: "quiclink.receiver.decode")
-    private var groupReady = false
+    private let activeLock = NSLock()
+    private var activeRequests: [NWConnection] = []
     private var stopped = false
 
     // MARK: - Decode pipeline (decodeQueue only)
@@ -65,69 +63,33 @@ final class QuicLinkReceiver: VideoReceiver {
         } else {
             nwHost = NWEndpoint.Host(host)
         }
-        let endpoint = NWEndpoint.hostPort(host: nwHost, port: nwPort)
-        let params = NWParameters(quic: quic)
-        // NOTE: do NOT set `params.requiredInterfaceType = .loopback`. The proven spike
-        // (QuicLoopbackSpikeTests) reaches `.ready` reliably with no interface constraint;
-        // forcing the loopback interface type made the group park in `waiting(Network is
-        // down)` and reach `.ready` only intermittently.
-        group = NWConnectionGroup(with: NWMultiplexGroup(to: endpoint), using: params)
-
-        // Mandatory handler; we don't expect server-initiated streams, but the group
-        // refuses to start without it.
-        group.newConnectionHandler = { conn in conn.start(queue: self.netQueue) }
-
-        group.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            NSLog("QuicLinkReceiver: group state: \(state)")
-            switch state {
-            case .ready:
-                NSLog("QuicLinkReceiver: group ready")
-                self.onGroupReady()
-            case .failed(let e):
-                NSLog("QuicLinkReceiver: group failed: \(e)")
-                self.delegate?.videoReceiverDidDisconnect()
-            case .cancelled:
-                self.delegate?.videoReceiverDidDisconnect()
-            default:
-                break
-            }
-        }
-
-        group.start(queue: netQueue)
+        endpoint = NWEndpoint.hostPort(host: nwHost, port: nwPort)
+        params = NWParameters(quic: quic)
         startDisplayTimer()
-    }
-
-    // MARK: - Request/reply pull pool
-
-    private func onGroupReady() {
         netQueue.async {
-            guard !self.groupReady, !self.stopped else { return }
-            self.groupReady = true
             for _ in 0..<Self.poolSize { self.openRequestStream() }
         }
     }
+
+    // MARK: - Request/reply pull pool
 
     /// Open one frame-request stream: send a 1-byte request, read the full reply (one
     /// complete `VideoPacket`), push it to the jitter buffer, then open a replacement.
     private func openRequestStream() {
         if stopped { return }
-        guard let stream = NWConnection(from: group) else {
-            NSLog("QuicLinkReceiver: NWConnection(from: group) returned nil")
-            return
-        }
+        let stream = NWConnection(to: endpoint, using: params)
+        retainRequest(stream)
         stream.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
-                // Request the next frame; keep our send side OPEN (isComplete: false) so the
-                // bidirectional stream stays open for the server's reply.
-                stream.send(content: Data([0x01]), isComplete: false,
+                // Half-close our send side after the 1-byte request. The stream remains
+                // bidirectional, allowing the server to reply on its send side.
+                stream.send(content: Data([0x01]), isComplete: true,
                             completion: .contentProcessed { _ in })
                 self.receiveReply(on: stream, accumulated: Data())
             case .failed:
-                stream.cancel()
-                self.reopenAfterClose()
+                self.close(stream)
             default:
                 break
             }
@@ -135,28 +97,37 @@ final class QuicLinkReceiver: VideoReceiver {
         stream.start(queue: netQueue)
     }
 
-    /// Accumulate the full reply message until `isComplete`, then parse + enqueue.
+    /// Accumulate reply bytes until they form a complete `VideoPacket`, then enqueue.
     private func receiveReply(on stream: NWConnection, accumulated: Data) {
         stream.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var total = accumulated
             if let data, !data.isEmpty { total.append(data) }
-            if isComplete || error != nil {
-                if error == nil, let packet = VideoPacket.parse(total) {
-                    self.decodeQueue.async { self.jitter.push(packet) }
-                }
-                stream.cancel()
-                self.reopenAfterClose()
+            if error == nil, let packet = VideoPacket.parse(total) {
+                self.decodeQueue.async { self.jitter.push(packet) }
+                self.close(stream)
+            } else if isComplete || error != nil {
+                if error == nil { NSLog("QuicLinkReceiver: failed to parse packet bytes=\(total.count)") }
+                self.close(stream)
             } else {
                 self.receiveReply(on: stream, accumulated: total)
             }
         }
     }
 
-    /// Keep the pool full: replace a stream that just finished.
-    private func reopenAfterClose() {
+    private func retainRequest(_ stream: NWConnection) {
+        activeLock.lock()
+        activeRequests.append(stream)
+        activeLock.unlock()
+    }
+
+    private func close(_ stream: NWConnection) {
+        activeLock.lock()
+        activeRequests.removeAll { $0 === stream }
+        activeLock.unlock()
+        stream.cancel()
         netQueue.async {
-            guard self.groupReady, !self.stopped else { return }
+            guard !self.stopped else { return }
             self.openRequestStream()
         }
     }
@@ -211,7 +182,11 @@ final class QuicLinkReceiver: VideoReceiver {
 
     func stop() {
         netQueue.async { self.stopped = true }
-        group.cancel()
+        activeLock.lock()
+        let requests = activeRequests
+        activeRequests.removeAll()
+        activeLock.unlock()
+        for request in requests { request.cancel() }
         decodeQueue.async {
             self.displayTimer?.cancel()
             self.displayTimer = nil

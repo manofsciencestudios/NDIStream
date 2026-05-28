@@ -1,6 +1,7 @@
 import Foundation
 
 enum QuicLinkProtocol {
+    static let networkQueue = DispatchQueue(label: "quiclink.network")
     static let bonjourServiceType = "_ndistream-ql._udp"
     static let alpn = "ndistream-quiclink-v1"
     static let txtKeySourceName = "src"

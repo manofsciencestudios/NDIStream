@@ -15,8 +15,9 @@ final class QuicTLS {
 
     // MARK: - Load or create
 
-    /// Loads the persisted self-signed identity, generating it once if absent.
-    /// Path: ~/Library/Application Support/NDIStream/quiclink-identity.p12
+    /// Generates a short-lived self-signed local identity and returns its certificate pin.
+    /// Reloading a previously generated p12 left Network.framework QUIC handshakes stuck
+    /// before the verify block on macOS loopback, while a fresh identity matches the spike.
     static func loadOrCreate() -> QuicTLS? {
         // 1. Determine the App Support path; create the NDIStream dir if needed.
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
@@ -33,18 +34,18 @@ final class QuicTLS {
             return nil
         }
 
-        let p12URL = dir.appendingPathComponent("quiclink-identity.p12")
+        let p12URL = dir.appendingPathComponent("quiclink-identity-v3.p12")
         let p12Password = "ndistream-quiclink"
 
-        // 2. If the .p12 does not exist, generate cert+key via /usr/bin/openssl
-        //    (RSA-2048, self-signed, CN=NDIStream, -days 3650) and export to the .p12
+        // 2. Generate cert+key via /usr/bin/openssl
+        //    (RSA-2048, self-signed, CN=localhost, -days 1) and export to the .p12
         //    with a fixed passphrase. LibreSSL's default PBE is the legacy format
         //    that SecPKCS12Import accepts; no -legacy flag is needed (or recognized).
-        if !FileManager.default.fileExists(atPath: p12URL.path) {
-            NSLog("QuicTLS: no persisted identity found; generating…")
-            guard generateP12(at: p12URL, password: p12Password) else {
-                return nil
-            }
+        if FileManager.default.fileExists(atPath: p12URL.path) {
+            try? FileManager.default.removeItem(at: p12URL)
+        }
+        guard generateP12(at: p12URL, password: p12Password) else {
+            return nil
         }
 
         // 3. Load the .p12 with SecPKCS12Import -> SecIdentity.
@@ -84,7 +85,6 @@ final class QuicTLS {
             return nil
         }
 
-        NSLog("QuicTLS: identity loaded; pin=\(pinSHA256.map { String(format: "%02x", $0) }.joined())")
         return QuicTLS(identity: secIdentityT, pinSHA256: pinSHA256)
     }
 
@@ -138,14 +138,14 @@ final class QuicTLS {
         let keyPath  = tmpDir.appendingPathComponent("key.pem").path
         let certPath = tmpDir.appendingPathComponent("cert.pem").path
 
-        // Step A: generate self-signed RSA-2048 cert, CN=NDIStream, valid 3650 days.
+        // Step A: generate self-signed RSA-2048 cert, CN=localhost, valid 1 day.
         guard runOpenSSL([
             "req", "-x509", "-nodes",
             "-newkey", "rsa:2048",
             "-keyout", keyPath,
             "-out",    certPath,
-            "-days",   "3650",
-            "-subj",   "/CN=NDIStream"
+            "-days",   "1",
+            "-subj",   "/CN=localhost"
         ]) else { return false }
 
         // Step B: export cert+key to PKCS#12.
@@ -159,7 +159,6 @@ final class QuicTLS {
             "-passout", "pass:\(password)"
         ]) else { return false }
 
-        NSLog("QuicTLS: generated new identity at \(url.path)")
         return true
     }
 
