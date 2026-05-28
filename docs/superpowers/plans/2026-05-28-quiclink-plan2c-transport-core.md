@@ -97,7 +97,7 @@ enum QLCodec: UInt8 {
 /// (carried on every all-intra frame so any frame is independently decodable),
 /// then the AVCC payload. All multi-byte fields are big-endian.
 ///
-/// Header layout (fixed 24 bytes):
+/// Header layout (fixed 26 bytes):
 ///   magic(2)=0x514C, version(1), codec(1), flags(1: bit0 keyframe), reserved(1),
 ///   ptsNanos(8), width(2), height(2), parameterSetsLength(4), payloadLength(4)
 /// Then `parameterSetsLength` bytes of parameter-set blob:
@@ -106,7 +106,7 @@ enum QLCodec: UInt8 {
 struct VideoPacket: Equatable {
     static let magic: UInt16 = 0x514C
     static let version: UInt8 = 2
-    static let headerByteCount = 24
+    static let headerByteCount = 26
     private static let keyframeFlag: UInt8 = 0x01
 
     var codec: QLCodec
