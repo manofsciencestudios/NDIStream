@@ -202,6 +202,12 @@ final class BroadcastController: ObservableObject {
             DebugLog.write("lowestLatency=\(lowestLatency) ndiInitialized=\(initialized) pendingRelaunch=\(lowestLatencyRelaunchRequired)")
         }
     }
+    @Published var transport: VideoTransportKind {
+        didSet {
+            UserDefaults.standard.set(transport.rawValue, forKey: "senderTransport")
+            if isBroadcasting { restartSender() }
+        }
+    }
     @Published var lowestLatencyRelaunchRequired: Bool = false
     @Published var isBroadcasting: Bool = false
     @Published var isTransitioning: Bool = false
@@ -216,19 +222,19 @@ final class BroadcastController: ObservableObject {
 
     let cameraManager = CameraManager()
     let recorder = Recorder(filenamePrefix: "Sender")
-    private var sender: NDISender?
+    private var sender: VideoSender?
     private let senderLock = NSLock()
     private let frameWatchdog = SenderFrameWatchdog()
     private let frameRepeater = SenderFrameRepeater()
     private var appliedLowestLatency = false
 
-    private func setSender(_ s: NDISender?) {
+    private func setSender(_ s: VideoSender?) {
         senderLock.lock()
         sender = s
         senderLock.unlock()
     }
 
-    private func currentSender() -> NDISender? {
+    private func currentSender() -> VideoSender? {
         senderLock.lock()
         let s = sender
         senderLock.unlock()
@@ -279,6 +285,8 @@ final class BroadcastController: ObservableObject {
         }
         self.slate = UserDefaults.standard.string(forKey: "senderSlate") ?? ""
         self.autoRecord = UserDefaults.standard.bool(forKey: "senderAutoRecord")
+        self.transport = UserDefaults.standard.string(forKey: "senderTransport")
+            .flatMap(VideoTransportKind.init(rawValue:)) ?? .ndi
         cameraManager.setPixelFormat(pixelFormat)
         DebugLog.write("BroadcastController selectedCameraID=\(selectedCameraID) selectedAudioDeviceID=\(selectedAudioDeviceID) audioEnabled=\(audioEnabled) sourceName=\(sourceName) fps=\(targetFPS) quality=\(quality.rawValue) pixelFormat=\(pixelFormat.rawValue) smoothPacing=\(smoothPacing) lowestLatency=\(lowestLatency)")
     }
@@ -350,13 +358,15 @@ final class BroadcastController: ObservableObject {
                 return
             }
 
-            guard let s = NDISender(sourceName: self.sourceName, clockVideo: self.smoothPacing) else {
-                DebugLog.write("ERROR NDISender create failed sourceName=\(self.sourceName)")
-                self.status = .error("Failed to create NDI sender. Is the NDI runtime installed?")
+            guard let s = TransportFactory.makeSender(transport: self.transport,
+                                                      sourceName: self.sourceName,
+                                                      clockVideo: self.smoothPacing) else {
+                DebugLog.write("ERROR sender create failed transport=\(self.transport.rawValue) sourceName=\(self.sourceName)")
+                self.status = .error("Failed to create \(self.transport.rawValue) sender.")
                 self.isTransitioning = false
                 return
             }
-            DebugLog.write("NDISender created sourceName=\(self.sourceName) clockVideo=\(self.smoothPacing)")
+            DebugLog.write("sender created transport=\(self.transport.rawValue) sourceName=\(self.sourceName) clockVideo=\(self.smoothPacing)")
             self.setSender(s)
             if self.audioEnabled {
                 self.cameraManager.onAudioSampleBuffer = { [weak self] sampleBuffer in
@@ -385,7 +395,7 @@ final class BroadcastController: ObservableObject {
                     if sentFrameCount == 1 || sentFrameCount % 60 == 0 {
                         DebugLog.write("sender onFrame \(sentFrameCount) \(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb)) pf=\(CVPixelBufferGetPixelFormatType(pb)) pts=\(pts.seconds)")
                     }
-                    snd.send(pb, frameRateN: fpsN, frameRateD: fpsD)
+                    snd.send(pixelBuffer: pb, frameRateN: fpsN, frameRateD: fpsD)
                 } else {
                     DebugLog.write("WARN onFrame with nil sender")
                 }
@@ -398,7 +408,7 @@ final class BroadcastController: ObservableObject {
             }
             self.frameRepeater.start { [weak self] in
                 guard let self, let snd = self.currentSender() else { return }
-                snd.repeatLastFrame(withFrameRateN: fpsN, frameRateD: fpsD)
+                snd.repeatLastFrame(frameRateN: fpsN, frameRateD: fpsD)
             }
             self.cameraManager.start()
             self.isBroadcasting = true
@@ -438,7 +448,8 @@ final class BroadcastController: ObservableObject {
         let outgoing = currentSender()
         setSender(nil)
         outgoing?.stop()
-        let fresh = NDISender(sourceName: sourceName, clockVideo: smoothPacing)
+        let fresh = TransportFactory.makeSender(transport: transport,
+                                                sourceName: sourceName, clockVideo: smoothPacing)
         setSender(fresh)
         if fresh == nil {
             DebugLog.write("ERROR restartSender failed")
