@@ -13,6 +13,11 @@ struct FoundSource: Equatable {
     let name: String
     let address: String
     let transport: VideoTransportKind
+    /// QuicLink only: the UDP port the sender's QUIC listener advertises. nil for NDI.
+    var port: UInt16? = nil
+    /// QuicLink only: the SHA-256 of the sender's leaf cert DER, used to pin the
+    /// TLS handshake. nil for NDI.
+    var pinSHA256: Data? = nil
 }
 
 /// Sends camera frames + audio over some transport. Mirrors the NDISender surface.
