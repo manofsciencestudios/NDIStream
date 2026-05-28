@@ -184,13 +184,39 @@ alongside the existing settings.
 
 ## Risks / unknowns to resolve in planning (spikes)
 
-1. **Group-wide stream directionality.** Network.framework ties directionality to the
-   whole connection group, not individual streams. May force all-bidirectional streams
-   or two groups (one control, one media). **Spike a stream-model proof before
-   committing.**
-2. **QUIC mandates TLS.** For a LAN peer tool, generate a self-signed identity and pin
-   it via a custom `sec_protocol` verify block — not a real CA. Needs a small trust
-   bootstrap.
+1. **QUIC multi-stream model (RESOLVED by spike).**
+   - Multi-stream QUIC = `NWMultiplexGroup(to: endpoint)` + `NWConnectionGroup(with:
+     multiplex, using: params)`. Each stream is an `NWConnection`.
+   - Open an outbound stream: `NWConnection(from: group)` then `.start(queue:)`. The
+     listener receives each inbound stream as an `NWConnection` via
+     `listener.newConnectionHandler`.
+   - An `NWConnectionGroup` refuses to `.start()` unless a `newConnectionHandler` is set
+     first.
+   - Stream directionality is GROUP-WIDE, set via `NWProtocolQUIC.Options.direction`
+     (e.g. `.bidirectional`) — it is NOT per-stream (confirms the forum note).
+     Implication for QuicLink: one group cannot mix unidirectional media + bidirectional
+     control with differing directions; either run everything `.bidirectional` in one
+     group, or use two groups. Verified: 2 concurrent streams round-trip on loopback.
+   - `NWProtocolQUIC.Options.isDatagram` exists (toggles datagram mode) — relevant to the
+     phase-2 FEC path.
+2. **Self-signed TLS + pinning (RESOLVED by spike).**
+   - Identity (spike method): self-signed cert+key via system `openssl` (LibreSSL) →
+     PKCS#12 → `SecPKCS12Import` → `SecIdentity` → `sec_identity_create`. NOTE:
+     LibreSSL's default p12 PBE is the legacy format `SecPKCS12Import` accepts; modern
+     OpenSSL's AES-256 PBE is rejected and would need `-legacy`.
+   - Server attaches identity: `sec_protocol_options_set_local_identity(quic.securityProtocolOptions, identity)`.
+   - Client pins: `sec_protocol_options_set_verify_block` — get the presented leaf via
+     `SecTrustCopyCertificateChain`, compare SHA-256 of the leaf cert DER to the known
+     pin, `complete(true/false)`. Do NOT call SecTrustEvaluate (it rejects self-signed).
+   - Pin representation: spike uses full-cert-DER SHA-256 because `SecCertificateCopyKey`
+     fails to extract some EC public keys (OSStatus -26275). Production should prefer
+     RFC-7469 SPKI pinning (survives cert reissue) with a key type whose SPKI extracts
+     cleanly.
+   - Verified: correct pin → handshake succeeds + streams flow; wrong pin → TLS handshake
+     fails (boringssl CERTIFICATE_VERIFY_FAILED / security error -9808), no usable stream.
+   - Production follow-ups (NOT done in spike): generate the identity at runtime without
+     shelling to openssl; distribute/verify the pin out-of-band (e.g. via the Bonjour TXT
+     record, or trust-on-first-use).
 3. **No QUIC-layer stream prioritization.** If audio competes with video, manage it
    with separate streams + app-level pacing.
 4. **HEVC encode floor.** Hardware HEVC *encode* needs Kaby Lake+ / Apple Silicon;
