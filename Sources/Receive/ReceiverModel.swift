@@ -8,7 +8,7 @@ import Foundation
 final class ReceiverModel: NSObject, ObservableObject {
     enum Tally: Equatable { case idle, waiting, live, reconnecting }
 
-    @Published var availableSources: [NDIFoundSource] = []
+    @Published var availableSources: [FoundSource] = []
     @Published var selectedSourceName: String = ""
     @Published var isConnected: Bool = false
     @Published var statusLine: String = "No source selected"
@@ -39,14 +39,14 @@ final class ReceiverModel: NSObject, ObservableObject {
     nonisolated let recorder = Recorder(filenamePrefix: "Receiver")
     nonisolated let audioPlayer = AudioPlayer()
 
-    private let finder: NDIFinder?
-    private var receiver: NDIReceiver?
+    private let finder: SourceFinder?
+    private var receiver: VideoReceiver?
     private var receivedFrameCount = 0
     private var hasPerformedInitialAutoselect = false
 
     override init() {
         DebugLog.write("ReceiverModel.init")
-        self.finder = NDIFinder.startNew()
+        self.finder = TransportFactory.makeFinder()
         super.init()
 
         displayLayer.videoGravity = .resizeAspect
@@ -98,8 +98,8 @@ final class ReceiverModel: NSObject, ObservableObject {
 
         UserDefaults.standard.set(name, forKey: "lastReceiverSource")
 
-        guard let r = NDIReceiver(sourceName: source.name, sourceAddress: source.address) else {
-            DebugLog.write("ERROR receiver create failed name=\(source.name) address=\(source.address)")
+        guard let r = TransportFactory.makeReceiver(for: source) else {
+            DebugLog.write("ERROR receiver create failed name=\(source.name) address=\(source.address) transport=\(source.transport.rawValue)")
             statusLine = "Failed to create receiver"
             return
         }
@@ -136,8 +136,8 @@ final class ReceiverModel: NSObject, ObservableObject {
     }
 }
 
-extension ReceiverModel: NDIReceiverDelegate {
-    nonisolated func receiverDidReceive(_ sampleBuffer: CMSampleBuffer,
+extension ReceiverModel: VideoReceiverDelegate {
+    nonisolated func videoReceiverDidReceive(sampleBuffer: CMSampleBuffer,
                                         width: Int32,
                                         height: Int32,
                                         frameRateN: Int32,
@@ -158,13 +158,13 @@ extension ReceiverModel: NDIReceiverDelegate {
         }
     }
 
-    nonisolated func receiverDidDisconnect() {
+    nonisolated func videoReceiverDidDisconnect() {
         Task { @MainActor in
             self.handleRemoteDisconnect()
         }
     }
 
-    nonisolated func receiverDidStall(forSeconds seconds: Int) {
+    nonisolated func videoReceiverDidStall(forSeconds seconds: Int) {
         Task { @MainActor in
             guard self.isConnected else { return }
             self.statusLine = "Reconnecting (\(seconds)s)…"
@@ -172,7 +172,7 @@ extension ReceiverModel: NDIReceiverDelegate {
         }
     }
 
-    nonisolated func receiverDidResume() {
+    nonisolated func videoReceiverDidResume() {
         Task { @MainActor in
             guard self.isConnected else { return }
             self.statusLine = "Reconnected"
@@ -180,7 +180,7 @@ extension ReceiverModel: NDIReceiverDelegate {
         }
     }
 
-    nonisolated func receiverDidReceiveAudio(_ samples: UnsafePointer<Float>,
+    nonisolated func videoReceiverDidReceiveAudio(samples: UnsafePointer<Float>,
                                               sampleRate: Int32,
                                               channels: Int32,
                                               samplesPerChannel: Int32,
