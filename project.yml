@@ -66,3 +66,28 @@ targets:
           chmod u+w "${DST}"
           install_name_tool -id @rpath/libndi.dylib "${DST}" || true
           codesign --force --sign - "${DST}"
+
+  NDIStreamTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: NDIStream
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mike.ndistream.NDIStreamTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/NDIStream.app/Contents/MacOS/NDIStream"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  NDIStream:
+    build:
+      targets:
+        NDIStream: all
+        NDIStreamTests: [test]
+    test:
+      targets:
+        - NDIStreamTests
+      gatherCoverageData: false
