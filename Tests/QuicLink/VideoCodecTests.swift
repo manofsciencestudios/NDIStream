@@ -21,4 +21,29 @@ final class VideoCodecTests: XCTestCase {
         XCTAssertNotNil(frame.formatDescription)
         enc.invalidate()
     }
+
+    func testEncodeDecodeRoundTrip() throws {
+        let enc = try XCTUnwrap(VideoEncoder(width: 320, height: 240, codec: .hevc,
+                                             fps: 30, bitrate: 2_000_000))
+        let encoded = expectation(description: "encoded")
+        var frame: VideoEncoder.EncodedFrame?
+        enc.onEncodedFrame = { if frame == nil { frame = $0; encoded.fulfill() } }
+        enc.encode(PixelBufferFactory.solid(width: 320, height: 240),
+                   pts: CMTime(value: 0, timescale: 30))
+        wait(for: [encoded], timeout: 5.0)
+        let f = try XCTUnwrap(frame)
+
+        let dec = try XCTUnwrap(VideoDecoder(formatDescription: f.formatDescription))
+        let decoded = expectation(description: "decoded")
+        var outPB: CVPixelBuffer?
+        dec.onDecodedFrame = { pb, _ in if outPB == nil { outPB = pb; decoded.fulfill() } }
+        dec.decode(f.data, pts: f.pts, isKeyframe: f.isKeyframe)
+        wait(for: [decoded], timeout: 5.0)
+
+        let pb = try XCTUnwrap(outPB)
+        XCTAssertEqual(CVPixelBufferGetWidth(pb), 320)
+        XCTAssertEqual(CVPixelBufferGetHeight(pb), 240)
+        enc.invalidate()
+        dec.invalidate()
+    }
 }
