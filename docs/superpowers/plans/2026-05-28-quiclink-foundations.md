@@ -186,12 +186,12 @@ enum QLCodec: UInt8 {
     case hevc = 1
 }
 
-/// Fixed 20-byte big-endian header that precedes every QuicLink video frame.
-/// Layout: magic(2) version(1) codec(1) flags(1) reserved(1) pts(8) width(2) height(2) payloadLength(4)
+/// Fixed 22-byte big-endian header that precedes every QuicLink video frame.
+/// Layout: magic(2) version(1) codec(1) flags(1) reserved(1) pts(8) width(2) height(2) payloadLength(4) = 22 bytes
 struct VideoFrameHeader {
     static let magic: UInt16 = 0x514C            // "QL"
     static let version: UInt8 = 1
-    static let byteCount = 20
+    static let byteCount = 22
     private static let keyframeFlag: UInt8 = 0x01
 
     var codec: QLCodec
