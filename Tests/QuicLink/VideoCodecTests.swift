@@ -34,20 +34,20 @@ final class VideoCodecTests: XCTestCase {
         let f = try XCTUnwrap(frame)
 
         // Prove the encoded payload survives the QuicLink wire framing intact.
-        let header = VideoFrameHeader(codec: .hevc, isKeyframe: f.isKeyframe,
-                                      ptsNanos: 0, width: 320, height: 240,
-                                      payloadLength: UInt32(f.data.count))
-        let wire = VideoFrameHeader.serialize(header: header, payload: f.data)
-        let parsed = try XCTUnwrap(VideoFrameHeader.parse(wire))
+        let packet = VideoPacket(codec: .hevc, isKeyframe: f.isKeyframe,
+                                 ptsNanos: 0, width: 320, height: 240,
+                                 parameterSets: [], payload: f.data)
+        let wire = packet.serialize()
+        let parsed = try XCTUnwrap(VideoPacket.parse(wire))
         XCTAssertEqual(parsed.payload, f.data)
-        XCTAssertEqual(parsed.header.codec, .hevc)
-        XCTAssertTrue(parsed.header.isKeyframe)
+        XCTAssertEqual(parsed.codec, .hevc)
+        XCTAssertTrue(parsed.isKeyframe)
 
         let dec = try XCTUnwrap(VideoDecoder(formatDescription: f.formatDescription))
         let decoded = expectation(description: "decoded")
         var outPB: CVPixelBuffer?
         dec.onDecodedFrame = { pb, _ in if outPB == nil { outPB = pb; decoded.fulfill() } }
-        dec.decode(parsed.payload, pts: f.pts, isKeyframe: parsed.header.isKeyframe)
+        dec.decode(parsed.payload, pts: f.pts, isKeyframe: parsed.isKeyframe)
         wait(for: [decoded], timeout: 5.0)
 
         let pb = try XCTUnwrap(outPB)
