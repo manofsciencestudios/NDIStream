@@ -18,4 +18,20 @@ final class NDITransportTests: XCTestCase {
         let mapped = NDISourceFinder.mapForTesting(name: "CAM (Mac Camera)", address: "10.0.0.5")
         XCTAssertEqual(mapped, FoundSource(name: "CAM (Mac Camera)", address: "10.0.0.5", transport: .ndi))
     }
+
+    func testVideoTransportKindHasWarpStreamCase() {
+        XCTAssertEqual(VideoTransportKind.warpStream.rawValue, "warpStream")
+        XCTAssertTrue(VideoTransportKind.allCases.contains(.warpStream))
+    }
+
+    func testFoundSourceCarriesRoomCode() {
+        let s = FoundSource(name: "X", address: "1.2.3.4", transport: .warpStream,
+                            port: 7000, pinSHA256: Data([1,2,3]), roomCode: "ABC123")
+        XCTAssertEqual(s.roomCode, "ABC123")
+    }
+
+    func testFoundSourceRoomCodeDefaultsNil() {
+        let s = FoundSource(name: "X", address: "1.2.3.4", transport: .ndi)
+        XCTAssertNil(s.roomCode)
+    }
 }

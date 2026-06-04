@@ -6,6 +6,7 @@ import Foundation
 enum VideoTransportKind: String, CaseIterable {
     case ndi
     case quicLink
+    case warpStream
 }
 
 /// A discovered source the receiver can connect to, tagged by transport.
@@ -13,11 +14,12 @@ struct FoundSource: Equatable {
     let name: String
     let address: String
     let transport: VideoTransportKind
-    /// QuicLink only: the UDP port the sender's QUIC listener advertises. nil for NDI.
+    /// QuicLink + WarpStream (Bonjour path): the UDP port the sender advertises. nil for NDI and for room-code paths.
     var port: UInt16? = nil
-    /// QuicLink only: the SHA-256 of the sender's leaf cert DER, used to pin the
-    /// TLS handshake. nil for NDI.
+    /// QuicLink: SHA-256 of the sender's leaf cert DER. WarpStream: PSK fingerprint. nil for NDI and for room-code paths.
     var pinSHA256: Data? = nil
+    /// WarpStream only: the room code identifying the session. Surfaced from Bonjour TXT or entered manually by the operator.
+    var roomCode: String? = nil
 }
 
 /// Sends camera frames + audio over some transport. Mirrors the NDISender surface.
@@ -26,6 +28,13 @@ protocol VideoSender: AnyObject {
     func repeatLastFrame(frameRateN: Int32, frameRateD: Int32)
     func sendAudio(_ sampleBuffer: CMSampleBuffer)
     func stop()
+    /// Optional shootout instrumentation. Default impl returns nil so existing
+    /// transports compile without changes.
+    func currentStats() -> TransportStats?
+}
+
+extension VideoSender {
+    func currentStats() -> TransportStats? { nil }
 }
 
 /// Receives decoded frames + audio. Callbacks fire on a non-main (transport) thread;
@@ -44,6 +53,13 @@ protocol VideoReceiverDelegate: AnyObject {
 protocol VideoReceiver: AnyObject {
     var delegate: VideoReceiverDelegate? { get set }
     func stop()
+    /// Optional shootout instrumentation. Default impl returns nil so existing
+    /// transports compile without changes.
+    func currentStats() -> TransportStats?
+}
+
+extension VideoReceiver {
+    func currentStats() -> TransportStats? { nil }
 }
 
 /// Discovers sources on the network for one transport.
