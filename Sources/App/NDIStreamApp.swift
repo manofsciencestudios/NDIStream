@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var senderWindow: NSWindow!
     private var receiverWindow: NSWindow!
 
-    private var cameraLabel = NSTextField(labelWithString: "")
+    private var senderCameraDropdown = NSPopUpButton(frame: .zero, pullsDown: false)
     private var sourceNameField = NSTextField(string: "")
     private var qualityControl = NSSegmentedControl()
     private var senderTransportControl = NSSegmentedControl()
@@ -158,11 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var senderSlateField = NSTextField(string: "")
     private var senderAutoRecordCheckbox = NSButton()
     private var senderLockButton = NSButton()
-    private var senderCameraPrevButton = NSButton()
-    private var senderCameraNextButton = NSButton()
-    private var senderAudioPrevButton = NSButton()
-    private var senderAudioNextButton = NSButton()
-    private var senderAudioLabel = NSTextField(labelWithString: "")
+    private var senderAudioDropdown = NSPopUpButton(frame: .zero, pullsDown: false)
     private var senderAudioCheckbox = NSButton()
     private var senderFolderButton = NSButton()
     private var senderLogButton = NSButton()
@@ -171,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var senderStatusDot = NSView()
     private var senderStatusLabel = NSTextField(labelWithString: "Idle")
 
-    private var receiverSourceLabel = NSTextField(labelWithString: "")
+    private var receiverSourceDropdown = NSPopUpButton(frame: .zero, pullsDown: false)
     private var receiverConnectButton = NSButton()
     private var receiverStatusLabel = NSTextField(labelWithString: "")
     private var receiverRecordButton = NSButton()
@@ -181,8 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverAutoRecordCheckbox = NSButton()
     private var receiverAudioCheckbox = NSButton()
     private var receiverLockButton = NSButton()
-    private var receiverSourcePrevButton = NSButton()
-    private var receiverSourceNextButton = NSButton()
     private var receiverFolderButton = NSButton()
     private var receiverTallyDot = NSView()
     private var receiverTopBar: NSStackView!
@@ -368,26 +362,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         content.addArrangedSubview(senderRoomCodeContainer)
 
         content.addArrangedSubview(sectionLabel("Camera"))
-        let cameraRow = row()
-        senderCameraPrevButton = button("‹", action: #selector(previousCamera), width: 32)
-        senderCameraNextButton = button("›", action: #selector(nextCamera), width: 32)
-        cameraRow.addArrangedSubview(senderCameraPrevButton)
-        cameraLabel.lineBreakMode = .byTruncatingMiddle
-        cameraLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        cameraRow.addArrangedSubview(cameraLabel)
-        cameraRow.addArrangedSubview(senderCameraNextButton)
-        content.addArrangedSubview(cameraRow)
+        senderCameraDropdown.target = self
+        senderCameraDropdown.action = #selector(senderCameraDropdownChanged)
+        senderCameraDropdown.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        senderCameraDropdown.widthAnchor.constraint(equalToConstant: 400).isActive = true
+        content.addArrangedSubview(senderCameraDropdown)
 
         content.addArrangedSubview(sectionLabel("Microphone"))
-        let audioRow = row()
-        senderAudioPrevButton = button("‹", action: #selector(previousAudioDevice), width: 32)
-        senderAudioNextButton = button("›", action: #selector(nextAudioDevice), width: 32)
-        audioRow.addArrangedSubview(senderAudioPrevButton)
-        senderAudioLabel.lineBreakMode = .byTruncatingMiddle
-        senderAudioLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        audioRow.addArrangedSubview(senderAudioLabel)
-        audioRow.addArrangedSubview(senderAudioNextButton)
-        content.addArrangedSubview(audioRow)
+        senderAudioDropdown.target = self
+        senderAudioDropdown.action = #selector(senderAudioDropdownChanged)
+        senderAudioDropdown.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        senderAudioDropdown.widthAnchor.constraint(equalToConstant: 400).isActive = true
+        content.addArrangedSubview(senderAudioDropdown)
 
         senderAudioCheckbox = NSButton(checkboxWithTitle: "Send microphone audio", target: self, action: #selector(senderAudioChanged))
         content.addArrangedSubview(senderAudioCheckbox)
@@ -499,13 +485,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverTallyDot.widthAnchor.constraint(equalToConstant: 12).isActive = true
         receiverTallyDot.heightAnchor.constraint(equalToConstant: 12).isActive = true
         topBar.addArrangedSubview(receiverTallyDot)
-        receiverSourcePrevButton = button("‹", action: #selector(previousSource), width: 28)
-        receiverSourceNextButton = button("›", action: #selector(nextSource), width: 28)
-        topBar.addArrangedSubview(receiverSourcePrevButton)
-        receiverSourceLabel.lineBreakMode = .byTruncatingMiddle
-        receiverSourceLabel.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        topBar.addArrangedSubview(receiverSourceLabel)
-        topBar.addArrangedSubview(receiverSourceNextButton)
+        receiverSourceDropdown.target = self
+        receiverSourceDropdown.action = #selector(receiverSourceDropdownChanged)
+        receiverSourceDropdown.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        topBar.addArrangedSubview(receiverSourceDropdown)
         receiverConnectButton = NSButton(title: "Connect", target: self, action: #selector(toggleReceiver))
         topBar.addArrangedSubview(receiverConnectButton)
         receiverStatusLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -626,7 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateSenderUI() {
-        cameraLabel.stringValue = selectedCameraName
+        rebuildSenderCameraDropdown()
+        rebuildSenderAudioDropdown()
         sourceNameField.stringValue = senderController.sourceName
         if senderSlateField.stringValue != senderController.slate {
             senderSlateField.stringValue = senderController.slate
@@ -634,7 +618,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         qualityControl.selectedSegment = QualityPreset.allCases.firstIndex(of: senderController.quality) ?? 0
         fpsControl.selectedSegment = senderController.targetFPS == 60 ? 1 : 0
         pixelFormatControl.selectedSegment = CapturePixelFormat.allCases.firstIndex(of: senderController.pixelFormat) ?? 0
-        senderAudioLabel.stringValue = selectedAudioDeviceName
         senderAudioCheckbox.state = senderController.audioEnabled ? .on : .off
         pacingCheckbox.state = senderController.smoothPacing ? .on : .off
         lowestLatencyCheckbox.state = senderController.lowestLatency ? .on : .off
@@ -642,10 +625,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         senderAutoRecordCheckbox.state = senderController.autoRecord ? .on : .off
 
         let locked = senderController.isLocked
-        senderCameraPrevButton.isEnabled = !locked
-        senderCameraNextButton.isEnabled = !locked
-        senderAudioPrevButton.isEnabled = !locked && !senderController.isBroadcasting && senderController.availableAudioDevices.count > 1
-        senderAudioNextButton.isEnabled = !locked && !senderController.isBroadcasting && senderController.availableAudioDevices.count > 1
+        senderCameraDropdown.isEnabled = !locked && senderController.availableCameras.count > 0
+        senderAudioDropdown.isEnabled = !locked && !senderController.isBroadcasting && senderController.availableAudioDevices.count > 0
         senderAudioCheckbox.isEnabled = !locked && !senderController.isBroadcasting && !senderController.availableAudioDevices.isEmpty
         sourceNameField.isEnabled = !locked && !senderController.isBroadcasting
         senderSlateField.isEnabled = !locked
@@ -680,7 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateReceiverUI() {
-        receiverSourceLabel.stringValue = selectedSourceLabel
+        rebuildReceiverSourceDropdown()
         receiverConnectButton.title = receiverModel.isConnected ? "Disconnect" : "Connect"
         let sourceOnline = receiverModel.availableSources.contains(where: { $0.name == receiverModel.selectedSourceName })
         receiverStatusLabel.stringValue = receiverModel.statusLine
@@ -693,8 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverTallyDot.toolTip = receiverTallyTooltip
 
         let locked = receiverModel.isLocked
-        receiverSourcePrevButton.isEnabled = !locked && !receiverModel.isConnected
-        receiverSourceNextButton.isEnabled = !locked && !receiverModel.isConnected
+        receiverSourceDropdown.isEnabled = !locked && !receiverModel.isConnected && receiverModel.availableSources.count > 0
         receiverConnectButton.isEnabled = !locked && (receiverModel.isConnected || sourceOnline)
         receiverSlateField.isEnabled = !locked
         receiverAutoRecordCheckbox.isEnabled = !locked
@@ -748,10 +728,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusHideWindowsItem.isEnabled = senderWindow?.isVisible == true || receiverWindow?.isVisible == true
     }
 
-    @objc private func previousCamera() { selectCamera(offset: -1) }
-    @objc private func nextCamera() { selectCamera(offset: 1) }
-    @objc private func previousAudioDevice() { selectAudioDevice(offset: -1) }
-    @objc private func nextAudioDevice() { selectAudioDevice(offset: 1) }
+    @objc private func senderCameraDropdownChanged() {
+        guard let id = senderCameraDropdown.selectedItem?.representedObject as? String else { return }
+        senderController.selectedCameraID = id
+    }
+
+    @objc private func senderAudioDropdownChanged() {
+        guard let id = senderAudioDropdown.selectedItem?.representedObject as? String else { return }
+        senderController.selectedAudioDeviceID = id
+    }
+
+    @objc private func receiverSourceDropdownChanged() {
+        guard let name = receiverSourceDropdown.selectedItem?.representedObject as? String else { return }
+        receiverModel.selectedSourceName = name
+    }
+
     @objc private func sourceNameEdited() { senderController.sourceName = sourceNameField.stringValue }
     @objc private func qualityChanged() { senderController.quality = QualityPreset.allCases[max(0, qualityControl.selectedSegment)] }
     @objc private func fpsChanged() { senderController.targetFPS = fpsControl.selectedSegment == 1 ? 60 : 30 }
@@ -822,8 +813,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusMenu()
     }
 
-    @objc private func previousSource() { selectSource(offset: -1) }
-    @objc private func nextSource() { selectSource(offset: 1) }
     @objc private func toggleReceiver() { receiverModel.isConnected ? receiverModel.disconnect() : receiverModel.connect() }
     @objc private func toggleReceiverFromStatusItem() {
         toggleReceiver()
@@ -847,49 +836,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DebugLog.write("receiver lock=\(receiverModel.isLocked)")
     }
 
-    private func selectCamera(offset: Int) {
+    private func rebuildSenderCameraDropdown() {
         let cameras = senderController.availableCameras
-        guard cameras.count > 1 else { return }
-        let current = cameras.firstIndex { $0.uniqueID == senderController.selectedCameraID } ?? 0
-        let next = (current + offset + cameras.count) % cameras.count
-        senderController.selectedCameraID = cameras[next].uniqueID
-    }
-
-    private func selectAudioDevice(offset: Int) {
-        let devices = senderController.availableAudioDevices
-        guard devices.count > 1, !senderController.isBroadcasting else { return }
-        let current = devices.firstIndex { $0.uniqueID == senderController.selectedAudioDeviceID } ?? 0
-        let next = (current + offset + devices.count) % devices.count
-        senderController.selectedAudioDeviceID = devices[next].uniqueID
-    }
-
-    private func selectSource(offset: Int) {
-        let sources = receiverModel.availableSources
-        guard sources.count > 1, !receiverModel.isConnected else { return }
-        let current = sources.firstIndex { $0.name == receiverModel.selectedSourceName } ?? 0
-        let next = (current + offset + sources.count) % sources.count
-        receiverModel.selectedSourceName = sources[next].name
-    }
-
-    private var selectedCameraName: String {
-        if senderController.availableCameras.isEmpty { return "No cameras found" }
-        return senderController.currentDevice()?.localizedName ?? senderController.availableCameras.first?.localizedName ?? "Camera unavailable"
-    }
-
-    private var selectedAudioDeviceName: String {
-        if senderController.availableAudioDevices.isEmpty { return "No microphones found" }
-        return senderController.currentAudioDevice()?.localizedName ?? senderController.availableAudioDevices.first?.localizedName ?? "Microphone unavailable"
-    }
-
-    private var selectedSourceLabel: String {
-        if receiverModel.availableSources.isEmpty { return "No sources found" }
-        if !receiverModel.selectedSourceName.isEmpty {
-            if receiverModel.availableSources.contains(where: { $0.name == receiverModel.selectedSourceName }) {
-                return receiverModel.selectedSourceName
-            }
-            return "\(receiverModel.selectedSourceName) (offline)"
+        senderCameraDropdown.removeAllItems()
+        guard !cameras.isEmpty else {
+            senderCameraDropdown.addItem(withTitle: "No cameras found")
+            senderCameraDropdown.item(at: 0)?.isEnabled = false
+            return
         }
-        return receiverModel.availableSources.first?.name ?? "No sources found"
+        for cam in cameras {
+            senderCameraDropdown.addItem(withTitle: cam.localizedName)
+            senderCameraDropdown.item(at: senderCameraDropdown.numberOfItems - 1)?.representedObject = cam.uniqueID
+        }
+        let activeID = senderController.selectedCameraID
+        if let idx = cameras.firstIndex(where: { $0.uniqueID == activeID }) {
+            senderCameraDropdown.selectItem(at: idx)
+        } else {
+            senderCameraDropdown.selectItem(at: 0)
+        }
+    }
+
+    private func rebuildSenderAudioDropdown() {
+        let devices = senderController.availableAudioDevices
+        senderAudioDropdown.removeAllItems()
+        guard !devices.isEmpty else {
+            senderAudioDropdown.addItem(withTitle: "No microphones found")
+            senderAudioDropdown.item(at: 0)?.isEnabled = false
+            return
+        }
+        for dev in devices {
+            senderAudioDropdown.addItem(withTitle: dev.localizedName)
+            senderAudioDropdown.item(at: senderAudioDropdown.numberOfItems - 1)?.representedObject = dev.uniqueID
+        }
+        let activeID = senderController.selectedAudioDeviceID
+        if let idx = devices.firstIndex(where: { $0.uniqueID == activeID }) {
+            senderAudioDropdown.selectItem(at: idx)
+        } else {
+            senderAudioDropdown.selectItem(at: 0)
+        }
+    }
+
+    private func rebuildReceiverSourceDropdown() {
+        let sources = receiverModel.availableSources
+        receiverSourceDropdown.removeAllItems()
+        guard !sources.isEmpty else {
+            receiverSourceDropdown.addItem(withTitle: "No sources found")
+            receiverSourceDropdown.item(at: 0)?.isEnabled = false
+            return
+        }
+        for src in sources {
+            receiverSourceDropdown.addItem(withTitle: src.name)
+            receiverSourceDropdown.item(at: receiverSourceDropdown.numberOfItems - 1)?.representedObject = src.name
+        }
+        let activeName = receiverModel.selectedSourceName
+        if let idx = sources.firstIndex(where: { $0.name == activeName }) {
+            receiverSourceDropdown.selectItem(at: idx)
+        } else if !activeName.isEmpty {
+            // Selected source went offline — show it greyed at top so the operator can see it's missing.
+            receiverSourceDropdown.insertItem(withTitle: "\(activeName) (offline)", at: 0)
+            receiverSourceDropdown.item(at: 0)?.isEnabled = false
+            receiverSourceDropdown.selectItem(at: 0)
+        } else {
+            receiverSourceDropdown.selectItem(at: 0)
+        }
     }
 
     private var senderStatusColor: NSColor {
