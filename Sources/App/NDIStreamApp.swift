@@ -286,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func installStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "NDI"
+        statusItem.button?.title = "Stream"
         statusItem.button?.toolTip = "NDIStream"
 
         let menu = NSMenu()
@@ -389,10 +389,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         audioRow.addArrangedSubview(senderAudioNextButton)
         content.addArrangedSubview(audioRow)
 
-        senderAudioCheckbox = NSButton(checkboxWithTitle: "Send microphone audio over NDI", target: self, action: #selector(senderAudioChanged))
+        senderAudioCheckbox = NSButton(checkboxWithTitle: "Send microphone audio", target: self, action: #selector(senderAudioChanged))
         content.addArrangedSubview(senderAudioCheckbox)
 
-        content.addArrangedSubview(sectionLabel("NDI source name"))
+        content.addArrangedSubview(sectionLabel("Stream Source Name"))
         sourceNameField.target = self
         sourceNameField.action = #selector(sourceNameEdited)
         sourceNameField.isContinuous = false
@@ -737,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStatusMenu() {
         guard statusItem != nil else { return }
-        statusItem.button?.title = senderController.isBroadcasting || receiverModel.isConnected ? "NDI ●" : "NDI"
+        statusItem.button?.title = senderController.isBroadcasting || receiverModel.isConnected ? "Stream ●" : "Stream"
         statusLineItem.title = statusSummary
         statusBroadcastItem.title = senderController.isBroadcasting ? "Stop Broadcasting" : "Start Broadcasting"
         statusBroadcastItem.isEnabled = !senderController.isTransitioning && !senderController.availableCameras.isEmpty
