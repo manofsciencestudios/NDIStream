@@ -22,6 +22,10 @@ final class NDIVideoSender: VideoSender {
     func sendAudio(_ sampleBuffer: CMSampleBuffer) { ndi.sendAudio(sampleBuffer) }
 
     func stop() { ndi.stop() }
+
+    // NDI SDK does not expose per-stream metrics; adapter has no meter yet.
+    // Returning nil makes the stats overlay render "—" for the NDI baseline.
+    func currentStats() -> TransportStats? { nil }
 }
 
 /// Wraps the ObjC NDIReceiver, translating its delegate callbacks to VideoReceiverDelegate.
@@ -40,6 +44,8 @@ final class NDIVideoReceiver: NSObject, VideoReceiver, NDIReceiverDelegate {
         ndi.delegate = nil
         ndi.stop()
     }
+
+    func currentStats() -> TransportStats? { nil }
 
     // MARK: NDIReceiverDelegate → VideoReceiverDelegate
 

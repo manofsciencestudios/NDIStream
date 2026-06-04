@@ -57,4 +57,16 @@ final class NDITransportTests: XCTestCase {
         XCTAssertNil(s.endToEndLatencyMs)
         XCTAssertNil(s.jitterBufferMs)
     }
+
+    func testNDIVideoSenderCurrentStatsReturnsNilForNow() {
+        // The NDI SDK doesn't expose stats; the adapter returns nil until we have a meter.
+        // This test pins behavior so we notice when we wire something in.
+        let sender = NDIVideoSender(sourceName: "TestSrc", clockVideo: false)
+        // Sender may be nil if NDI runtime isn't initialized in the test host; only check stats if alive.
+        if let sender = sender {
+            XCTAssertNil(sender.currentStats(),
+                         "NDI adapter has no stats meter yet; expect nil until one is added")
+            sender.stop()
+        }
+    }
 }
