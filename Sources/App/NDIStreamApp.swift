@@ -141,6 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cameraLabel = NSTextField(labelWithString: "")
     private var sourceNameField = NSTextField(string: "")
     private var qualityControl = NSSegmentedControl()
+    private var senderTransportControl = NSSegmentedControl()
+    private var senderRoomCodeLabel = NSTextField(labelWithString: "")
+    private var senderRoomCodeCopyButton = NSButton()
+    private var senderRoomCodeContainer = NSStackView()
     private var fpsControl = NSSegmentedControl()
     private var pixelFormatControl = NSSegmentedControl()
     private var pacingCheckbox = NSButton()
@@ -277,6 +281,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         content.alignment = .leading
         content.spacing = 10
         content.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
+
+        senderTransportControl = NSSegmentedControl(labels: ["NDI", "QuicLink", "WarpStream"],
+                                                    trackingMode: .selectOne,
+                                                    target: self,
+                                                    action: #selector(senderTransportChanged))
+        senderTransportControl.selectedSegment = AppDelegate.transportIndex(senderController.transport)
+        let senderTransportRow = NSStackView(views: [
+            NSTextField(labelWithString: "Transport:"),
+            senderTransportControl
+        ])
+        senderTransportRow.spacing = 8
+        content.addArrangedSubview(senderTransportRow)
+
+        senderRoomCodeLabel.font = NSFont.monospacedSystemFont(ofSize: 24, weight: .semibold)
+        senderRoomCodeLabel.stringValue = "—"
+        senderRoomCodeLabel.isSelectable = true
+        senderRoomCodeCopyButton.title = "Copy"
+        senderRoomCodeCopyButton.bezelStyle = .rounded
+        senderRoomCodeCopyButton.target = self
+        senderRoomCodeCopyButton.action = #selector(copySenderRoomCode)
+        senderRoomCodeContainer = NSStackView(views: [
+            NSTextField(labelWithString: "Room Code:"),
+            senderRoomCodeLabel,
+            senderRoomCodeCopyButton
+        ])
+        senderRoomCodeContainer.spacing = 8
+        senderRoomCodeContainer.isHidden = true   // shown only for WarpStream + broadcasting
+        content.addArrangedSubview(senderRoomCodeContainer)
 
         content.addArrangedSubview(sectionLabel("Camera"))
         let cameraRow = row()
@@ -542,6 +574,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         senderStatusLabel.stringValue = senderStatusText
         senderStatusDot.layer?.backgroundColor = senderStatusColor.cgColor
         updateStatusMenu()
+        // WarpStream room code visibility — show only when broadcasting via WarpStream.
+        let showRoomCode = (senderController.transport == .warpStream && senderController.isBroadcasting)
+        senderRoomCodeContainer.isHidden = !showRoomCode
+        if showRoomCode {
+            senderRoomCodeLabel.stringValue = senderController.currentRoomCode ?? "—"
+        } else {
+            senderRoomCodeLabel.stringValue = "—"
+        }
+        // Keep transport picker reflecting model state if it changed elsewhere.
+        senderTransportControl.selectedSegment = AppDelegate.transportIndex(senderController.transport)
     }
 
     private func updateReceiverUI() {
@@ -824,6 +866,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func formatElapsed(_ t: TimeInterval) -> String {
         let total = Int(t)
         return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    // MARK: Transport picker helpers (WarpStream integration)
+
+    private static func transportIndex(_ t: VideoTransportKind) -> Int {
+        switch t {
+        case .ndi: return 0
+        case .quicLink: return 1
+        case .warpStream: return 2
+        }
+    }
+
+    private static func transportFromIndex(_ i: Int) -> VideoTransportKind {
+        switch i {
+        case 1: return .quicLink
+        case 2: return .warpStream
+        default: return .ndi
+        }
+    }
+
+    @objc private func senderTransportChanged() {
+        let new = AppDelegate.transportFromIndex(senderTransportControl.selectedSegment)
+        DebugLog.write("UI senderTransportChanged -> \(new.rawValue)")
+        senderController.transport = new
+        updateSenderUI()
+    }
+
+    @objc private func copySenderRoomCode() {
+        let code = senderRoomCodeLabel.stringValue
+        guard code != "—" else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        DebugLog.write("UI copied sender room code=\(code)")
     }
 }
 
