@@ -262,6 +262,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         viewMenu.addItem(receiverStatsMenuItem)
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
+
+        // Record menu — keyboard shortcuts for toggling recording on each side.
+        let recordItem = NSMenuItem()
+        let recordMenu = NSMenu(title: "Record")
+        let recordSenderItem = NSMenuItem(title: "Toggle Sender Recording",
+                                          action: #selector(toggleSenderRecording),
+                                          keyEquivalent: "r")
+        recordSenderItem.keyEquivalentModifierMask = [.command]
+        recordSenderItem.target = self
+        recordMenu.addItem(recordSenderItem)
+        let recordReceiverItem = NSMenuItem(title: "Toggle Receiver Recording",
+                                            action: #selector(toggleReceiverRecording),
+                                            keyEquivalent: "R")
+        recordReceiverItem.keyEquivalentModifierMask = [.command, .shift]
+        recordReceiverItem.target = self
+        recordMenu.addItem(recordReceiverItem)
+        recordItem.submenu = recordMenu
+        mainMenu.addItem(recordItem)
+
         NSApp.mainMenu = mainMenu
     }
 
