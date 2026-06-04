@@ -117,7 +117,7 @@ enum TransportFactory {
             return nil
         case .warpStream:
             // Routing rule: room-code path (no port) vs Bonjour-discovered path.
-            // The stub adapter returns nil in both cases; real impl arrives with WarpStream SDK.
+            // The stub adapter no-ops both; real impl arrives with WarpStream SDK.
             if source.port == nil {
                 return WarpStreamVideoReceiver(roomCode: source.roomCode ?? "")
             } else {
