@@ -54,6 +54,10 @@ final class StatsOverlay {
         panel.contentView = container
     }
 
+    deinit {
+        timer?.invalidate()
+    }
+
     func show() {
         guard let parent = parentWindow else { return }
         repositionPanel(in: parent)

@@ -466,7 +466,7 @@ final class BroadcastController: ObservableObject {
         setSender(fresh)
         if fresh == nil {
             DebugLog.write("ERROR restartSender failed")
-            status = .error("Failed to recreate NDI sender.")
+            status = .error("Failed to recreate \(transport.rawValue) sender.")
         } else {
             DebugLog.write("restartSender succeeded")
         }

@@ -13,36 +13,51 @@ final class RecordingSmokeTests: XCTestCase {
     func testReceiverRecorderProducesReadableMov() async throws {
         let recorder = Recorder(filenamePrefix: "SmokeTest")
         recorder.start(slate: "SMOKE", includeAudio: false)
-        defer { recorder.stop() }
 
         for i in 0..<30 {
             let pb = try makeBlackPixelBuffer(width: 320, height: 240)
             let pts = CMTime(value: CMTimeValue(i), timescale: 30)
             recorder.append(pixelBuffer: pb, pts: pts)
         }
-        // Give the writer queue a moment to flush.
-        Thread.sleep(forTimeInterval: 0.5)
+        // Brief grace period for the writer queue to receive all 30 frames
+        // before stop() starts the finalization sequence.
+        try await Task.sleep(nanoseconds: 200_000_000)
         recorder.stop()
-        Thread.sleep(forTimeInterval: 0.5)
 
-        // Find the most recent .mov in ~/Movies/NDIStream/ matching the prefix.
+        // Poll for the file to appear and for the moov atom to be readable.
+        // AVAssetWriter.finishWriting runs asynchronously; without polling
+        // the test races on completion (see plan code review I4).
         let dir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("NDIStream")
-        let contents = (try? FileManager.default.contentsOfDirectory(at: dir,
-                                                                      includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        let smokeFiles = contents.filter { $0.lastPathComponent.hasPrefix("SmokeTest") }
-        guard let latest = smokeFiles.max(by: { (a, b) in
-            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return da < db
-        }) else {
-            XCTFail("No SmokeTest .mov produced in \(dir.path)")
+        let deadline = Date().addingTimeInterval(5)
+        var latest: URL?
+        var tracks: [AVAssetTrack] = []
+        while Date() < deadline {
+            let contents = (try? FileManager.default.contentsOfDirectory(at: dir,
+                                                                          includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            let smokeFiles = contents.filter { $0.lastPathComponent.hasPrefix("SmokeTest") }
+            if let file = smokeFiles.max(by: { (a, b) in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return da < db
+            }) {
+                let asset = AVURLAsset(url: file)
+                let loaded = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+                if !loaded.isEmpty {
+                    latest = file
+                    tracks = loaded
+                    break
+                }
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        guard let smokeFile = latest else {
+            XCTFail("No SmokeTest .mov with readable video tracks appeared in \(dir.path) within 5s")
             return
         }
-        defer { try? FileManager.default.removeItem(at: latest) }
+        defer { try? FileManager.default.removeItem(at: smokeFile) }
 
-        let asset = AVAsset(url: latest)
-        let tracks = try await asset.loadTracks(withMediaType: .video)
         XCTAssertFalse(tracks.isEmpty, "Recorded .mov should have at least one video track")
     }
 

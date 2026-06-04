@@ -20,7 +20,6 @@ final class ReceiverModel: NSObject, ObservableObject {
             }
         }
     }
-    @Published var roomCodeEntry: String = ""
     @Published var isConnected: Bool = false
     @Published var statusLine: String = "No source selected"
     @Published var lastFormat: FrameFormat? = nil
@@ -104,7 +103,12 @@ final class ReceiverModel: NSObject, ObservableObject {
         // Remove stale entries for the transports represented in this callback,
         // then re-insert.
         let touchedTransports = Set(sources.map(\.transport))
-        for key in allSources.keys where touchedTransports.contains(allSources[key]!.transport) {
+        // Snapshot keys before mutating — iterating `allSources.keys` while
+        // calling `removeValue(forKey:)` is undefined behavior in Swift.
+        let staleKeys = allSources.compactMap { (key, value) in
+            touchedTransports.contains(value.transport) ? key : nil
+        }
+        for key in staleKeys {
             allSources.removeValue(forKey: key)
         }
         for src in sources {

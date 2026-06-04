@@ -191,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverRoomCodeField = NSTextField(string: "")
     private var receiverJoinByCodeButton = NSButton()
     private var receiverRoomCodeContainer = NSStackView()
+    private var receiverTransportRow = NSStackView()
 
     private var senderStatsOverlay: StatsOverlay?
     private var receiverStatsOverlay: StatsOverlay?
@@ -522,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                        target: self,
                                                        action: #selector(receiverTransportChanged))
         receiverTransportControl.selectedSegment = AppDelegate.transportIndex(receiverModel.selectedTransport)
-        let receiverTransportRow = NSStackView(views: [
+        receiverTransportRow = NSStackView(views: [
             NSTextField(labelWithString: "Transport:"),
             receiverTransportControl
         ])
@@ -565,12 +566,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func receiverDidEnterFullScreen() {
         receiverTopBar?.isHidden = true
         receiverBottomBar?.isHidden = true
+        receiverTransportRow.isHidden = true
+        receiverRoomCodeContainer.isHidden = true
         DebugLog.write("receiver entered fullscreen — bars hidden")
     }
 
     @objc private func receiverDidExitFullScreen() {
         receiverTopBar?.isHidden = false
         receiverBottomBar?.isHidden = false
+        receiverTransportRow.isHidden = false
+        // receiverRoomCodeContainer visibility restored by updateReceiverUI()
+        updateReceiverUI()
         DebugLog.write("receiver exited fullscreen — bars shown")
     }
 
@@ -614,6 +620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sourceNameField.isEnabled = !locked && !senderController.isBroadcasting
         senderSlateField.isEnabled = !locked
         qualityControl.isEnabled = !locked
+        senderTransportControl.isEnabled = !locked
         fpsControl.isEnabled = !locked
         pixelFormatControl.isEnabled = !locked
         pacingCheckbox.isEnabled = !locked && !senderController.lowestLatency
@@ -662,6 +669,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverSlateField.isEnabled = !locked
         receiverAutoRecordCheckbox.isEnabled = !locked
         receiverAudioCheckbox.isEnabled = !locked
+        receiverTransportControl.isEnabled = !locked
+        receiverRoomCodeField.isEnabled = !locked
+        receiverJoinByCodeButton.isEnabled = !locked && !receiverModel.isConnected
         receiverRecordButton.isEnabled = !locked && receiverModel.isConnected
         receiverRecordButton.title = receiverModel.recorder.isRecording ? "STOP REC" : "REC"
         receiverTimerLabel.stringValue = formatElapsed(receiverModel.recorder.elapsed)
