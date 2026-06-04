@@ -25,7 +25,10 @@ Running list of improvements identified during use. Each entry is a candidate fo
 
 ---
 
-## 2. Rename "NDI source name" → "Stream Source Name"
+## 2. ✅ Rename "NDI source name" → "Stream Source Name"
+
+**Status:** Done — commit `e435817`. Also renamed mic checkbox label and status bar icon strings as part of the audit.
+
 
 **What:** Update the Sender window label from `"NDI source name"` to `"Stream Source Name"` — transport-agnostic since the app now carries NDI, QuicLink, and WarpStream.
 
@@ -52,7 +55,10 @@ Running list of improvements identified during use. Each entry is a candidate fo
 
 ---
 
-## 4. Add a Record hotkey
+## 4. ✅ Add a Record hotkey
+
+**Status:** Done — commit `1c571d3`. Added a Record menu with ⌘R (Sender) and ⇧⌘R (Receiver).
+
 
 **What:** Bind a keyboard shortcut to the Record button. Verified there is no existing `keyEquivalent` on `senderRecordButton` / `receiverRecordButton` and no menu item invokes `toggleSenderRecording` / `toggleReceiverRecording`.
 
@@ -64,7 +70,10 @@ Running list of improvements identified during use. Each entry is a candidate fo
 
 ---
 
-## 5. Missing Edit menu — ⌘V (and ⌘C, ⌘X) don't work in any text field
+## 5. ✅ Missing Edit menu — ⌘V (and ⌘C, ⌘X) don't work in any text field
+
+**Status:** Done — commit `c5ecb37`. Added a standard Edit menu (Cut / Copy / Paste / Select All) with `nil`-target actions routed via the AppKit responder chain.
+
 
 **What:** No Edit menu exists in `installMenu()` (verified — only App, Window, View menus). On macOS, the standard text-editing shortcuts (⌘C / ⌘V / ⌘X / ⌘A) only route to the first-responder text field when there's a menu item with the corresponding `paste:` / `copy:` / `cut:` / `selectAll:` selector. Without that menu, the shortcuts silently no-op.
 
@@ -139,7 +148,10 @@ Both should be user-definable.
 
 ---
 
-## 8. Receiver borderless fullscreen mode
+## 8. ✅ Receiver borderless fullscreen mode
+
+**Status:** Done — commit `cef130a`. ⌘⇧F + View menu toggle; Esc exits; cursor auto-hides at 3s; uses whichever screen the receiver window is on. Multi-display picker is a follow-up.
+
 
 **What:** A receiver mode that takes up the entire screen with the incoming video and ZERO chrome — no title bar, no traffic lights, no bars. Distinct from macOS's standard green-button fullscreen (which creates a new Space, animates the transition, and keeps a hidden title bar).
 
@@ -296,7 +308,10 @@ Window
 
 ---
 
-## 12. Replace ‹ › arrows with dropdowns for camera + microphone selection
+## 12. ✅ Replace ‹ › arrows with dropdowns for camera + microphone selection
+
+**Status:** Done — commit `2c6bacf`. Sender camera, sender microphone, AND receiver source all migrated to `NSPopUpButton`. Receiver source shows the previously-selected source as "X (offline)" pinned at top when it disappears, so the operator sees what's missing. Open question about sort order ("built-in first") deferred — current order preserves the iteration order from BroadcastController / ReceiverModel.
+
 
 **What:** Replace the current prev/next arrow buttons for camera and microphone selection with an `NSPopUpButton` (dropdown) showing all available devices at once.
 
