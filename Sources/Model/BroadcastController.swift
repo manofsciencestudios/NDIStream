@@ -241,6 +241,15 @@ final class BroadcastController: ObservableObject {
         return s
     }
 
+    /// The active WarpStream sender's room code, if any. nil for other transports
+    /// or when not broadcasting. Reads from the underlying sender, not state.
+    var currentRoomCode: String? {
+        guard transport == .warpStream, let ws = currentSender() as? WarpStreamVideoSender else {
+            return nil
+        }
+        return ws.roomCode
+    }
+
     init() {
         DebugLog.write("BroadcastController.init")
         let cameras = CameraManager.availableDevices()
