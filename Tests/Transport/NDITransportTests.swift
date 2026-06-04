@@ -34,4 +34,27 @@ final class NDITransportTests: XCTestCase {
         let s = FoundSource(name: "X", address: "1.2.3.4", transport: .ndi)
         XCTAssertNil(s.roomCode)
     }
+
+    func testTransportStatsRoundtrip() {
+        let s = TransportStats(bitrateKbps: 8400, sendLatencyMs: 12, wireLatencyMs: 18,
+                               receiveLatencyMs: 32, endToEndLatencyMs: 62,
+                               jitterBufferMs: 24, framesDropped: 3, cpuPercent: 14.5)
+        XCTAssertEqual(s.bitrateKbps, 8400)
+        XCTAssertEqual(s.sendLatencyMs, 12)
+        XCTAssertEqual(s.wireLatencyMs, 18)
+        XCTAssertEqual(s.receiveLatencyMs, 32)
+        XCTAssertEqual(s.endToEndLatencyMs, 62)
+        XCTAssertEqual(s.jitterBufferMs, 24)
+        XCTAssertEqual(s.framesDropped, 3)
+        XCTAssertEqual(s.cpuPercent, 14.5)
+    }
+
+    func testTransportStatsAllowsNilLatencies() {
+        let s = TransportStats(bitrateKbps: 100, framesDropped: 0, cpuPercent: 5)
+        XCTAssertNil(s.sendLatencyMs)
+        XCTAssertNil(s.wireLatencyMs)
+        XCTAssertNil(s.receiveLatencyMs)
+        XCTAssertNil(s.endToEndLatencyMs)
+        XCTAssertNil(s.jitterBufferMs)
+    }
 }
