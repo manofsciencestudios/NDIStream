@@ -187,6 +187,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverTallyDot = NSView()
     private var receiverTopBar: NSStackView!
     private var receiverBottomBar: NSStackView!
+    private var receiverTransportControl = NSSegmentedControl()
+    private var receiverRoomCodeField = NSTextField(string: "")
+    private var receiverJoinByCodeButton = NSButton()
+    private var receiverRoomCodeContainer = NSStackView()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.write("applicationDidFinishLaunching")
@@ -490,7 +494,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         receiverTopBar = topBar
         receiverBottomBar = bottomBar
+
+        receiverTransportControl = NSSegmentedControl(labels: ["NDI", "QuicLink", "WarpStream"],
+                                                       trackingMode: .selectOne,
+                                                       target: self,
+                                                       action: #selector(receiverTransportChanged))
+        receiverTransportControl.selectedSegment = AppDelegate.transportIndex(receiverModel.selectedTransport)
+        let receiverTransportRow = NSStackView(views: [
+            NSTextField(labelWithString: "Transport:"),
+            receiverTransportControl
+        ])
+        receiverTransportRow.spacing = 8
+        receiverTransportRow.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+
+        receiverRoomCodeField.placeholderString = "ABC123"
+        receiverRoomCodeField.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        receiverJoinByCodeButton.title = "Join"
+        receiverJoinByCodeButton.bezelStyle = .rounded
+        receiverJoinByCodeButton.target = self
+        receiverJoinByCodeButton.action = #selector(joinByRoomCode)
+        receiverRoomCodeContainer = NSStackView(views: [
+            NSTextField(labelWithString: "Or join by code:"),
+            receiverRoomCodeField,
+            receiverJoinByCodeButton
+        ])
+        receiverRoomCodeContainer.spacing = 8
+        receiverRoomCodeContainer.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 4, right: 10)
+        receiverRoomCodeContainer.isHidden = true   // shown only for .warpStream or .quicLink
+
         root.addArrangedSubview(topBar)
+        root.addArrangedSubview(receiverTransportRow)
+        root.addArrangedSubview(receiverRoomCodeContainer)
         root.addArrangedSubview(bottomBar)
         root.addArrangedSubview(display)
         receiverWindow = makeWindow(title: "NDIStream - Receiver", content: root, size: NSSize(width: 820, height: 540))
@@ -613,6 +647,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverLockButton.title = locked ? "🔒" : "🔓"
         receiverLockButton.toolTip = locked ? "Unlock controls" : "Lock controls (prevents accidental clicks)"
         updateStatusMenu()
+        // Show the room-code entry row for transports that support it.
+        let codeFieldVisible = (receiverModel.selectedTransport == .warpStream
+                                || receiverModel.selectedTransport == .quicLink)
+        receiverRoomCodeContainer.isHidden = !codeFieldVisible
+        // Keep transport picker reflecting model state if it changed elsewhere.
+        receiverTransportControl.selectedSegment = AppDelegate.transportIndex(receiverModel.selectedTransport)
     }
 
     private var receiverTallyColor: NSColor {
@@ -893,12 +933,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateSenderUI()
     }
 
+    @objc private func receiverTransportChanged() {
+        let new = AppDelegate.transportFromIndex(receiverTransportControl.selectedSegment)
+        DebugLog.write("UI receiverTransportChanged -> \(new.rawValue)")
+        receiverModel.selectedTransport = new
+        updateReceiverUI()
+    }
+
     @objc private func copySenderRoomCode() {
         let code = senderRoomCodeLabel.stringValue
         guard code != "—" else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(code, forType: .string)
         DebugLog.write("UI copied sender room code=\(code)")
+    }
+
+    @objc private func joinByRoomCode() {
+        let code = receiverRoomCodeField.stringValue
+        receiverModel.connectByRoomCode(code)
+        updateReceiverUI()
     }
 }
 
