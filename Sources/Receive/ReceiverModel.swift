@@ -46,7 +46,7 @@ final class ReceiverModel: NSObject, ObservableObject {
 
     override init() {
         DebugLog.write("ReceiverModel.init")
-        self.finder = TransportFactory.makeFinder()
+        self.finder = TransportFactory.makeFinders().first
         super.init()
 
         displayLayer.videoGravity = .resizeAspect

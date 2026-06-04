@@ -97,26 +97,41 @@ final class NDISourceFinder: SourceFinder {
     }
 }
 
-/// Picks transport backends by kind. Only `.ndi` is functional in Plan 2a;
-/// `.quicLink` returns nil until Plan 2c implements it.
+/// Picks transport backends by kind. `.quicLink` and `.warpStream` are wired but
+/// return nil from sender/receiver until their adapters land.
 enum TransportFactory {
     static func makeSender(transport: VideoTransportKind, sourceName: String,
                            clockVideo: Bool) -> VideoSender? {
         switch transport {
         case .ndi: return NDIVideoSender(sourceName: sourceName, clockVideo: clockVideo)
         case .quicLink: return nil
+        case .warpStream: return WarpStreamVideoSender(sourceName: sourceName, clockVideo: clockVideo)
         }
     }
 
     static func makeReceiver(for source: FoundSource) -> VideoReceiver? {
         switch source.transport {
-        case .ndi: return NDIVideoReceiver(sourceName: source.name, sourceAddress: source.address)
-        case .quicLink: return nil
+        case .ndi:
+            return NDIVideoReceiver(sourceName: source.name, sourceAddress: source.address)
+        case .quicLink:
+            return nil
+        case .warpStream:
+            // Routing rule: room-code path (no port) vs Bonjour-discovered path.
+            // The stub adapter returns nil in both cases; real impl arrives with WarpStream SDK.
+            if source.port == nil {
+                return WarpStreamVideoReceiver(roomCode: source.roomCode ?? "")
+            } else {
+                return WarpStreamVideoReceiver(discovered: source)
+            }
         }
     }
 
-    /// The finder(s) the receiver should run. Plan 2c adds a QuicLink finder alongside NDI.
-    static func makeFinder() -> SourceFinder {
-        NDISourceFinder()
+    /// The finders the receiver should run. Today: NDI live; QuicLink + WarpStream
+    /// stubs return empty source lists.
+    static func makeFinders() -> [SourceFinder] {
+        [
+            NDISourceFinder(),
+            WarpStreamSourceFinder(),
+        ]
     }
 }
