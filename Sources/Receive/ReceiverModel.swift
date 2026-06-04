@@ -56,6 +56,9 @@ final class ReceiverModel: NSObject, ObservableObject {
     /// Merged sources from all finders, keyed by `"<transport>::<name>"`.
     private var allSources: [String: FoundSource] = [:]
     private var receiver: VideoReceiver?
+    /// The active receiver (if connected). Public reader so UI can read the
+    /// underlying transport's `currentStats()`.
+    var activeReceiver: VideoReceiver? { receiver }
     private var receivedFrameCount = 0
     private var hasPerformedInitialAutoselect = false
 

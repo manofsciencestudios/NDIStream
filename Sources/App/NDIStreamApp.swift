@@ -192,6 +192,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverJoinByCodeButton = NSButton()
     private var receiverRoomCodeContainer = NSStackView()
 
+    private var senderStatsOverlay: StatsOverlay?
+    private var receiverStatsOverlay: StatsOverlay?
+    private var senderStatsMenuItem: NSMenuItem!
+    private var receiverStatsMenuItem: NSMenuItem!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.write("applicationDidFinishLaunching")
         DebugLog.write("logPath=\(DebugLog.url.path)")
@@ -228,6 +233,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         windowMenu.addItem(NSMenuItem(title: "Receiver", action: #selector(showReceiverWindow), keyEquivalent: "2"))
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
+
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        senderStatsMenuItem = NSMenuItem(title: "Show Sender Stats",
+                                          action: #selector(toggleSenderStats),
+                                          keyEquivalent: "i")
+        senderStatsMenuItem.keyEquivalentModifierMask = [.command]
+        senderStatsMenuItem.target = self
+        viewMenu.addItem(senderStatsMenuItem)
+        receiverStatsMenuItem = NSMenuItem(title: "Show Receiver Stats",
+                                            action: #selector(toggleReceiverStats),
+                                            keyEquivalent: "I")
+        receiverStatsMenuItem.keyEquivalentModifierMask = [.command, .shift]
+        receiverStatsMenuItem.target = self
+        viewMenu.addItem(receiverStatsMenuItem)
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
         NSApp.mainMenu = mainMenu
     }
 
@@ -952,6 +974,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let code = receiverRoomCodeField.stringValue
         receiverModel.connectByRoomCode(code)
         updateReceiverUI()
+    }
+
+    // MARK: Stats overlay (WarpStream integration)
+
+    @objc private func toggleSenderStats() {
+        if let overlay = senderStatsOverlay, overlay.isVisible {
+            overlay.hide()
+            senderStatsMenuItem.title = "Show Sender Stats"
+            return
+        }
+        let overlay = senderStatsOverlay ?? StatsOverlay(
+            title: "Sender",
+            parent: senderWindow,
+            provider: { [weak self] in
+                guard let self = self else {
+                    return (.ndi, nil)
+                }
+                return (self.senderController.transport,
+                        self.senderController.activeSender?.currentStats())
+            }
+        )
+        senderStatsOverlay = overlay
+        overlay.show()
+        senderStatsMenuItem.title = "Hide Sender Stats"
+    }
+
+    @objc private func toggleReceiverStats() {
+        if let overlay = receiverStatsOverlay, overlay.isVisible {
+            overlay.hide()
+            receiverStatsMenuItem.title = "Show Receiver Stats"
+            return
+        }
+        let overlay = receiverStatsOverlay ?? StatsOverlay(
+            title: "Receiver",
+            parent: receiverWindow,
+            provider: { [weak self] in
+                guard let self = self else {
+                    return (.ndi, nil)
+                }
+                return (self.receiverModel.selectedTransport,
+                        self.receiverModel.activeReceiver?.currentStats())
+            }
+        )
+        receiverStatsOverlay = overlay
+        overlay.show()
+        receiverStatsMenuItem.title = "Hide Receiver Stats"
     }
 }
 

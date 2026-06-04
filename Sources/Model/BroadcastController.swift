@@ -250,6 +250,10 @@ final class BroadcastController: ObservableObject {
         return ws.roomCode
     }
 
+    /// The active sender (if broadcasting). Public reader so UI can read the
+    /// underlying transport's `currentStats()`.
+    var activeSender: VideoSender? { currentSender() }
+
     init() {
         DebugLog.write("BroadcastController.init")
         let cameras = CameraManager.availableDevices()
