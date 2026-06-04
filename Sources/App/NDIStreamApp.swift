@@ -179,6 +179,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var receiverLockButton = NSButton()
     private var receiverFolderButton = NSButton()
     private var receiverTallyDot = NSView()
+    private var receiverDisplayHost: DisplayLayerHostNSView!
+    private var receiverBorderlessWindow: NSWindow?
+    private var receiverBorderlessHost: DisplayLayerHostNSView?
+    private var receiverBorderlessKeyMonitor: Any?
+    private var receiverBorderlessMouseMonitor: Any?
+    private var receiverBorderlessCursorTimer: Timer?
+    private var receiverBorderlessMenuItem: NSMenuItem!
     private var receiverTopBar: NSStackView!
     private var receiverBottomBar: NSStackView!
     private var receiverTransportControl = NSSegmentedControl()
@@ -254,6 +261,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         receiverStatsMenuItem.keyEquivalentModifierMask = [.command, .shift]
         receiverStatsMenuItem.target = self
         viewMenu.addItem(receiverStatsMenuItem)
+
+        viewMenu.addItem(NSMenuItem.separator())
+        receiverBorderlessMenuItem = NSMenuItem(title: "Enter Borderless Fullscreen",
+                                                action: #selector(toggleReceiverBorderless),
+                                                keyEquivalent: "F")
+        receiverBorderlessMenuItem.keyEquivalentModifierMask = [.command, .shift]
+        receiverBorderlessMenuItem.target = self
+        viewMenu.addItem(receiverBorderlessMenuItem)
+
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
 
@@ -527,6 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         display.attach(displayLayer: receiverModel.displayLayer)
         display.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
         display.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
+        receiverDisplayHost = display
 
         receiverTopBar = topBar
         receiverBottomBar = bottomBar
@@ -834,6 +851,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleReceiverLock() {
         receiverModel.isLocked.toggle()
         DebugLog.write("receiver lock=\(receiverModel.isLocked)")
+    }
+
+    @objc private func toggleReceiverBorderless() {
+        if receiverBorderlessWindow != nil {
+            exitReceiverBorderless()
+        } else {
+            enterReceiverBorderless()
+        }
+    }
+
+    private func enterReceiverBorderless() {
+        // Pick the screen that currently contains the receiver window, falling back
+        // to the main screen. Borderless covers that whole screen.
+        let screen = receiverWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
+
+        let window = NSWindow(contentRect: screen.frame,
+                              styleMask: [.borderless],
+                              backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = .black
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
+
+        let host = DisplayLayerHostNSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        host.autoresizingMask = [.width, .height]
+        window.contentView = host
+        host.attach(displayLayer: receiverModel.displayLayer)
+
+        window.setFrame(screen.frame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        receiverBorderlessWindow = window
+        receiverBorderlessHost = host
+        receiverBorderlessMenuItem.title = "Exit Borderless Fullscreen"
+        DebugLog.write("receiver entered borderless fullscreen screen=\(screen.localizedName)")
+
+        // Esc exits. Local monitor only fires when this app is key.
+        receiverBorderlessKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 {   // 53 = Esc
+                self?.exitReceiverBorderless()
+                return nil
+            }
+            return event
+        }
+
+        // Mouse motion resets the cursor-hide timer and shows the cursor.
+        receiverBorderlessMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            self?.borderlessShowCursor()
+            self?.scheduleBorderlessCursorHide()
+            return event
+        }
+        scheduleBorderlessCursorHide()
+    }
+
+    private func exitReceiverBorderless() {
+        guard let window = receiverBorderlessWindow else { return }
+        // Move the display layer back to the regular receiver window.
+        receiverDisplayHost?.attach(displayLayer: receiverModel.displayLayer)
+        window.orderOut(nil)
+        receiverBorderlessHost = nil
+        receiverBorderlessWindow = nil
+        if let mon = receiverBorderlessKeyMonitor { NSEvent.removeMonitor(mon) }
+        if let mon = receiverBorderlessMouseMonitor { NSEvent.removeMonitor(mon) }
+        receiverBorderlessKeyMonitor = nil
+        receiverBorderlessMouseMonitor = nil
+        receiverBorderlessCursorTimer?.invalidate()
+        receiverBorderlessCursorTimer = nil
+        borderlessShowCursor()
+        receiverBorderlessMenuItem.title = "Enter Borderless Fullscreen"
+        DebugLog.write("receiver exited borderless fullscreen")
+    }
+
+    private func scheduleBorderlessCursorHide() {
+        receiverBorderlessCursorTimer?.invalidate()
+        receiverBorderlessCursorTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            guard let self, self.receiverBorderlessWindow != nil else { return }
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
+    }
+
+    private func borderlessShowCursor() {
+        // setHiddenUntilMouseMoves auto-reverses on motion; nothing else to do here.
     }
 
     private func rebuildSenderCameraDropdown() {
