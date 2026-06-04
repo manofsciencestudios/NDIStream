@@ -19,4 +19,22 @@ final class ReceiverModelTransportFilterTests: XCTestCase {
         XCTAssertEqual(model.selectedTransport, .warpStream)
         UserDefaults.standard.removeObject(forKey: "receiverTransport")
     }
+
+    func testConnectByRoomCodeWithEmptyCodeReportsStatus() {
+        let model = ReceiverModel()
+        model.connectByRoomCode("")
+        XCTAssertEqual(model.statusLine, "Enter a room code")
+        XCTAssertFalse(model.isConnected)
+    }
+
+    func testConnectByRoomCodeUppercasesAndTrims() {
+        let model = ReceiverModel()
+        model.selectedTransport = .warpStream
+        // Stub adapter accepts and returns a no-op receiver; connection state should flip.
+        model.connectByRoomCode(" abc123 ")
+        // The stub WarpStreamVideoReceiver init returns a real instance, so:
+        XCTAssertTrue(model.isConnected)
+        XCTAssertEqual(model.selectedSourceName, "Code: ABC123")
+        model.disconnect()
+    }
 }

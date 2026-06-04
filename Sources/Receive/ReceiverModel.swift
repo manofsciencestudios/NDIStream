@@ -165,6 +165,46 @@ final class ReceiverModel: NSObject, ObservableObject {
         }
     }
 
+    /// Manual room-code path. Synthesizes a `FoundSource` with `port == nil` so
+    /// `TransportFactory.makeReceiver` routes through `WarpStreamVideoReceiver(roomCode:)`.
+    /// Only meaningful when `selectedTransport == .warpStream` (or another transport
+    /// that supports room codes); other transports will get nil from the factory.
+    func connectByRoomCode(_ code: String) {
+        let trimmed = code.trimmingCharacters(in: .whitespaces).uppercased()
+        DebugLog.write("receiver connectByRoomCode requested code=\(trimmed) transport=\(selectedTransport.rawValue)")
+        guard !trimmed.isEmpty else {
+            statusLine = "Enter a room code"
+            return
+        }
+        guard !isConnected else { return }
+
+        let synthetic = FoundSource(name: "Code: \(trimmed)",
+                                    address: "",
+                                    transport: selectedTransport,
+                                    port: nil,
+                                    pinSHA256: nil,
+                                    roomCode: trimmed)
+        guard let r = TransportFactory.makeReceiver(for: synthetic) else {
+            DebugLog.write("ERROR connectByRoomCode receiver create failed transport=\(selectedTransport.rawValue) code=\(trimmed)")
+            statusLine = "Failed to connect with code \(trimmed)"
+            return
+        }
+        r.delegate = self
+        receiver = r
+        selectedSourceName = synthetic.name
+        isConnected = true
+        tally = .waiting
+        ActivityKeeper.begin("receiver")
+        statusLine = "Joining \(trimmed)…"
+        lastFormat = nil
+        receivedFrameCount = 0
+        DebugLog.write("receiver created via code transport=\(selectedTransport.rawValue) code=\(trimmed)")
+        if autoRecord, !recorder.isRecording {
+            DebugLog.write("auto-record start (receiver, code path)")
+            recorder.start(slate: slate, includeAudio: true)
+        }
+    }
+
     func disconnect() {
         DebugLog.write("receiver disconnect requested")
         guard isConnected || receiver != nil else { return }
