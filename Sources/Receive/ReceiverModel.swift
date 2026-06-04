@@ -10,6 +10,17 @@ final class ReceiverModel: NSObject, ObservableObject {
 
     @Published var availableSources: [FoundSource] = []
     @Published var selectedSourceName: String = ""
+    @Published var selectedTransport: VideoTransportKind {
+        didSet {
+            UserDefaults.standard.set(selectedTransport.rawValue, forKey: "receiverTransport")
+            // When transport changes, re-filter the visible source list and clear stale selection.
+            refilterAndPublish()
+            if !availableSources.contains(where: { $0.name == selectedSourceName }) {
+                selectedSourceName = availableSources.first?.name ?? ""
+            }
+        }
+    }
+    @Published var roomCodeEntry: String = ""
     @Published var isConnected: Bool = false
     @Published var statusLine: String = "No source selected"
     @Published var lastFormat: FrameFormat? = nil
@@ -39,14 +50,22 @@ final class ReceiverModel: NSObject, ObservableObject {
     nonisolated let recorder = Recorder(filenamePrefix: "Receiver")
     nonisolated let audioPlayer = AudioPlayer()
 
-    private let finder: SourceFinder?
+    /// All finders running concurrently, one per transport. Their callbacks
+    /// merge into `allSources`; `availableSources` is the filtered view.
+    private let finders: [SourceFinder]
+    /// Merged sources from all finders, keyed by `"<transport>::<name>"`.
+    private var allSources: [String: FoundSource] = [:]
     private var receiver: VideoReceiver?
     private var receivedFrameCount = 0
     private var hasPerformedInitialAutoselect = false
 
     override init() {
         DebugLog.write("ReceiverModel.init")
-        self.finder = TransportFactory.makeFinders().first
+        self.finders = TransportFactory.makeFinders()
+        // Default to .ndi on first launch, restore last-used otherwise (per spec §"UI changes").
+        let savedTransport = UserDefaults.standard.string(forKey: "receiverTransport")
+            .flatMap(VideoTransportKind.init(rawValue:)) ?? .ndi
+        self.selectedTransport = savedTransport
         super.init()
 
         displayLayer.videoGravity = .resizeAspect
@@ -60,26 +79,54 @@ final class ReceiverModel: NSObject, ObservableObject {
         self.audioEnabled = UserDefaults.standard.bool(forKey: "receiverAudioEnabled")
         audioPlayer.setMuted(!audioEnabled)
 
-        finder?.onSourcesChanged = { [weak self] sources in
-            guard let self else { return }
-            Task { @MainActor in
-                self.availableSources = sources.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                DebugLog.write("receiver sources changed count=\(self.availableSources.count) names=\(self.availableSources.map { $0.name })")
-                if !self.hasPerformedInitialAutoselect, !self.availableSources.isEmpty, !self.isConnected {
-                    self.hasPerformedInitialAutoselect = true
-                    let savedMatches = self.availableSources.contains(where: { $0.name == self.selectedSourceName })
-                    if !savedMatches, let first = self.availableSources.first {
-                        let was = self.selectedSourceName
-                        self.selectedSourceName = first.name
-                        DebugLog.write("receiver auto-selected source=\(first.name) (saved='\(was)')")
-                    }
+        // Wire every finder's callback to merge into allSources.
+        for finder in finders {
+            finder.onSourcesChanged = { [weak self] sources in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.ingest(sources: sources)
                 }
             }
+            for src in finder.currentSources() {
+                let key = "\(src.transport.rawValue)::\(src.name)"
+                allSources[key] = src
+            }
         }
+        refilterAndPublish()
+    }
 
-        availableSources = (finder?.currentSources() ?? []).sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+    /// Merge a finder's current sources into the global map. Sources from other
+    /// transports are untouched. Triggers a refilter + autoselect pass.
+    private func ingest(sources: [FoundSource]) {
+        // Remove stale entries for the transports represented in this callback,
+        // then re-insert.
+        let touchedTransports = Set(sources.map(\.transport))
+        for key in allSources.keys where touchedTransports.contains(allSources[key]!.transport) {
+            allSources.removeValue(forKey: key)
         }
+        for src in sources {
+            allSources["\(src.transport.rawValue)::\(src.name)"] = src
+        }
+        refilterAndPublish()
+
+        if !hasPerformedInitialAutoselect, !availableSources.isEmpty, !isConnected {
+            hasPerformedInitialAutoselect = true
+            let savedMatches = availableSources.contains(where: { $0.name == selectedSourceName })
+            if !savedMatches, let first = availableSources.first {
+                let was = selectedSourceName
+                selectedSourceName = first.name
+                DebugLog.write("receiver auto-selected source=\(first.name) (saved='\(was)') transport=\(selectedTransport.rawValue)")
+            }
+        }
+    }
+
+    /// Publish the subset of `allSources` matching `selectedTransport`, sorted.
+    private func refilterAndPublish() {
+        let filtered = allSources.values
+            .filter { $0.transport == selectedTransport }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        availableSources = filtered
+        DebugLog.write("receiver sources refilter transport=\(selectedTransport.rawValue) count=\(filtered.count) names=\(filtered.map { $0.name })")
     }
 
     func connect() {
