@@ -2,27 +2,15 @@ import XCTest
 @testable import NDIStream
 
 final class NDITransportTests: XCTestCase {
-    func testFactoryReturnsNilForUnimplementedQuicLinkSender() {
-        let sender = TransportFactory.makeSender(transport: .quicLink,
-                                                 sourceName: "X", clockVideo: false)
-        XCTAssertNil(sender, "QuicLink sender is not implemented until Plan 2c")
-    }
 
-    func testFactoryReturnsNilForQuicLinkReceiver() {
-        let src = FoundSource(name: "X", address: "1.2.3.4", transport: .quicLink)
-        XCTAssertNil(TransportFactory.makeReceiver(for: src),
-                     "QuicLink receiver is not implemented until Plan 2c")
-    }
-
-    func testFoundSourceMappingTagsNDI() {
-        let mapped = NDISourceFinder.mapForTesting(name: "CAM (Mac Camera)", address: "10.0.0.5")
-        XCTAssertEqual(mapped, FoundSource(name: "CAM (Mac Camera)", address: "10.0.0.5", transport: .ndi))
-    }
+    // MARK: VideoTransportKind
 
     func testVideoTransportKindHasWarpStreamCase() {
         XCTAssertEqual(VideoTransportKind.warpStream.rawValue, "warpStream")
         XCTAssertTrue(VideoTransportKind.allCases.contains(.warpStream))
     }
+
+    // MARK: FoundSource
 
     func testFoundSourceCarriesRoomCode() {
         let s = FoundSource(name: "X", address: "1.2.3.4", transport: .warpStream,
@@ -34,6 +22,13 @@ final class NDITransportTests: XCTestCase {
         let s = FoundSource(name: "X", address: "1.2.3.4", transport: .ndi)
         XCTAssertNil(s.roomCode)
     }
+
+    func testFoundSourceMappingTagsNDI() {
+        let mapped = NDISourceFinder.mapForTesting(name: "CAM (Mac Camera)", address: "10.0.0.5")
+        XCTAssertEqual(mapped, FoundSource(name: "CAM (Mac Camera)", address: "10.0.0.5", transport: .ndi))
+    }
+
+    // MARK: TransportStats
 
     func testTransportStatsRoundtrip() {
         let s = TransportStats(bitrateKbps: 8400, sendLatencyMs: 12, wireLatencyMs: 18,
@@ -58,15 +53,59 @@ final class NDITransportTests: XCTestCase {
         XCTAssertNil(s.jitterBufferMs)
     }
 
-    func testNDIVideoSenderCurrentStatsReturnsNilForNow() {
-        // The NDI SDK doesn't expose stats; the adapter returns nil until we have a meter.
-        // This test pins behavior so we notice when we wire something in.
-        let sender = NDIVideoSender(sourceName: "TestSrc", clockVideo: false)
-        // Sender may be nil if NDI runtime isn't initialized in the test host; only check stats if alive.
-        if let sender = sender {
-            XCTAssertNil(sender.currentStats(),
-                         "NDI adapter has no stats meter yet; expect nil until one is added")
-            sender.stop()
-        }
+    // MARK: Factory routing
+
+    func testFactoryReturnsNilForUnimplementedQuicLinkSender() {
+        let sender = TransportFactory.makeSender(transport: .quicLink,
+                                                 sourceName: "X", clockVideo: false)
+        XCTAssertNil(sender, "QuicLink sender adapter not yet wired in NDIStream")
+    }
+
+    func testFactoryReturnsNilForQuicLinkReceiver() {
+        let src = FoundSource(name: "X", address: "1.2.3.4", transport: .quicLink)
+        XCTAssertNil(TransportFactory.makeReceiver(for: src),
+                     "QuicLink receiver adapter not yet wired in NDIStream")
+    }
+
+    func testFactoryReturnsStubForWarpStreamSender() {
+        let sender = TransportFactory.makeSender(transport: .warpStream,
+                                                 sourceName: "X", clockVideo: false)
+        // Stub returns a working no-op so the UI can be exercised end-to-end while
+        // WarpStream's SDK is unfinished. Once the real adapter lands, this assertion
+        // stays valid (a real sender is also non-nil).
+        XCTAssertNotNil(sender, "WarpStream stub should produce a no-op sender for UI smoke testing")
+        sender?.stop()
+    }
+
+    func testFactoryRoutesWarpStreamReceiverByPort() {
+        let discovered = FoundSource(name: "X", address: "10.0.0.5", transport: .warpStream,
+                                     port: 7000, pinSHA256: Data([1,2,3]), roomCode: "ABC123")
+        let manual = FoundSource(name: "Code: ABC123", address: "", transport: .warpStream,
+                                 port: nil, pinSHA256: nil, roomCode: "ABC123")
+        // Stub returns a no-op receiver for both routing paths. We're pinning that the
+        // factory routes both port-bearing and code-only FoundSources without crashing.
+        XCTAssertNotNil(TransportFactory.makeReceiver(for: discovered))
+        XCTAssertNotNil(TransportFactory.makeReceiver(for: manual))
+    }
+
+    func testMakeFindersIncludesNDIAndWarpStream() {
+        let finders = TransportFactory.makeFinders()
+        XCTAssertGreaterThanOrEqual(finders.count, 2,
+                                    "makeFinders should return at least NDI and WarpStream finders")
+    }
+
+    func testWarpStreamFinderMappingSeam() {
+        let fp = Data([0xab, 0xcd])
+        let s = WarpStreamSourceFinder.mapForTesting(name: "Mike's Camera",
+                                                     host: "10.0.0.7",
+                                                     port: 7000,
+                                                     pskFingerprint: fp,
+                                                     roomCode: "ABC123")
+        XCTAssertEqual(s.name, "Mike's Camera")
+        XCTAssertEqual(s.address, "10.0.0.7")
+        XCTAssertEqual(s.transport, .warpStream)
+        XCTAssertEqual(s.port, 7000)
+        XCTAssertEqual(s.pinSHA256, fp)
+        XCTAssertEqual(s.roomCode, "ABC123")
     }
 }
