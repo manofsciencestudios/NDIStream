@@ -1,7 +1,7 @@
 # WarpStream: third transport for the NDI vs QuicLink vs WarpStream shootout
 
-**Date:** 2026-06-04
-**Status:** Design approved, pending spec review
+**Date:** 2026-06-04 (open questions resolved 2026-06-23 against shipped WarpStream `v0.2.0-sender` + Plan 3 receiver design)
+**Status:** Design approved; all nine open questions resolved — see "Resolved questions" below
 **Codename:** "WarpStream" (UI label confirmed — segmented control reads `NDI | QuicLink | WarpStream`)
 
 ## Goal
@@ -134,6 +134,23 @@ public enum WarpStreamResolution {
 }
 ```
 
+> **Resolved 2026-06-23 — adapt to the shipped API, don't re-shape WarpStream.**
+> The signatures above are the *idealized* contract. The shipped `v0.2.0-sender`
+> exposes a different (and intentionally kept) surface:
+>
+> | Contract (idealized) | Shipped WarpStream | Adapter (`WarpStreamVideoSender`) responsibility |
+> |---|---|---|
+> | `init(sourceName:clockVideo:targetResolution:targetFrameRate:)` | `init(config: WarpStreamSenderConfig)` + `start() async throws` | Build the config (map quality preset → `VideoConfig(width,height,fps,bitrate)` ints — Q7); call `start()` |
+> | `send(pixelBuffer:frameRateN:frameRateD:)` | `submit(videoFrame: CVPixelBuffer, pts: CMTime) async throws` | Synthesize PTS, bridge async→sync |
+> | `repeatLastFrame(frameRateN:frameRateD:)` | *(none)* | Cache last `CVPixelBuffer`, re-`submit` with a new PTS |
+> | `sendAudio(_ sampleBuffer: CMSampleBuffer)` | `submit(audioFrame: AVAudioPCMBuffer, pts:) async throws` | Convert `CMSampleBuffer → AVAudioPCMBuffer` |
+> | `currentStats() -> TransportStats` | `stats(for: UUID) -> WarpStreamStats?` | Map `WarpStreamStats → TransportStats` (sender side fills bitrate/RTT→wire/dropped/cpu; finer split is receiver-side) |
+> | `roomCode: String` | `currentRoomCode: String` (async accessor) | Cache after `start()` for synchronous UI read |
+>
+> `WarpStreamResolution` does **not** exist in WarpStream (Q7) — it stays an
+> NDIStream-internal preset enum that the adapter maps to concrete ints. No
+> second contract-shaped facade is added to the WarpStream package.
+
 ### Receiver (in a new `WarpStreamReceiver` target)
 
 ```swift
@@ -154,16 +171,22 @@ public protocol WarpStreamReceiverDelegate: AnyObject {
 public final class WarpStreamReceiver {
     public weak var delegate: WarpStreamReceiverDelegate?
 
-    /// LAN connection via Bonjour-discovered source. Uses host/port/pskFingerprint
-    /// from the discovered source. Verifies the PSK fingerprint matches what the
-    /// receiver derives locally from `discovered.roomCode`.
-    public init?(discovered: WarpStreamDiscoveredSource)
+    /// LAN connection via Bonjour-discovered source. Pins on `certFingerprint`
+    /// and derives the QUIC PSK locally from `discovered.roomCode` as a second
+    /// factor. NOTE (resolved 2026-06-23): the shipped design makes init failable
+    /// + synchronous (validates args, no network) and moves the actual connect to
+    /// `start() async throws`. The NDIStream adapter calls `start()`.
+    public init?(discovered: WarpStreamDiscoveredSource,
+                 config: WarpStreamReceiverConfig = .init())
 
-    /// Manual connection via room code. Derives PSK locally. Resolution of how
-    /// the receiver actually reaches the sender (LAN scan + STUN + TURN + ...)
-    /// is internal to WarpStream — see open question Q5.
-    public init?(roomCode: String)
+    /// Manual connection via room code. LAN-only v1 (Q5): `start()` runs a bounded
+    /// Bonjour browse, matches the entered code against resolved TXT `code` values,
+    /// pins on that source's `certfp`, derives the PSK from the code. Throws
+    /// "not found on this network" if no match resolves. No STUN/TURN.
+    public init?(roomCode: String,
+                 config: WarpStreamReceiverConfig = .init())
 
+    public func start() async throws
     public func stop()
     public func currentStats() -> TransportStats
 }
@@ -172,8 +195,8 @@ public struct WarpStreamDiscoveredSource: Equatable {
     public let name: String
     public let host: String
     public let port: UInt16
-    public let pskFingerprint: Data    // SHA-256 of derived PSK; used by receiver to verify
-    public let roomCode: String        // surfaced so UI can show "or join: ABC123"
+    public let certFingerprint: Data   // SHA-256 of sender's ephemeral self-signed cert (TXT certfp); receiver pins on it
+    public let roomCode: String        // surfaced so UI can show "or join: ABC123"; also derives the QUIC PSK (2nd factor)
 }
 ```
 
@@ -215,11 +238,14 @@ acknowledged and fine — NDI is the closed-source baseline.
 
 ### Bonjour service + TXT record schema
 
-- Service type: `_warpstream._udp.local.`
-- TXT record keys:
+- Service type: `_warpstream._udp.local.` (matches shipped `BonjourAdvertiser.swift:27`)
+- TXT record keys (as shipped in `v0.2.0-sender`):
   - `src` — source name (UTF-8)
-  - `code` — room code (6 uppercase alphanumeric chars, no `0/O/1/I/L`)
-  - `pskfp` — PSK fingerprint hex (so receiver can verify PSK derivation)
+  - `code` — room code (6 chars, alphabet `ABCDEFGHJKMNPQRSTUVWXYZ23456789`)
+  - `certfp` — sender's ephemeral self-signed cert fingerprint, lowercase hex
+    (receiver pins on it). **Renamed from `pskfp`**: the shipped auth model is
+    cert-pinning with the room-code-derived PSK as a *second* factor, not a
+    published PSK fingerprint.
 - Port carried by SRV record automatically (Network.framework's NWListener).
 
 ## NDIStream-side changes
@@ -318,11 +344,12 @@ Two paths into a WarpStream session:
 2. `WarpStreamFinder` browses, resolves SRV/TXT, emits
    `WarpStreamDiscoveredSource`.
 3. `WarpStreamSourceFinder` adapter maps to
-   `FoundSource(transport: .warpStream, port: …, pinSHA256: pskfp, roomCode: code)`.
+   `FoundSource(transport: .warpStream, port: …, pinSHA256: certfp, roomCode: code)`
+   (`FoundSource.pinSHA256` now carries the **cert** fingerprint).
 4. User picks from dropdown → `TransportFactory.makeReceiver` sees `port != nil`
-   → invokes `WarpStreamReceiver(discovered:)`.
-5. WarpStream verifies PSK fingerprint matches local derivation from room code,
-   completes TLS-PSK handshake, begins streaming.
+   → invokes `WarpStreamReceiver(discovered:)`, then `start()`.
+5. WarpStream pins on the cert fingerprint, derives the PSK from the room code as
+   a second factor, completes the QUIC handshake, begins streaming.
 
 **Manual room-code path (cross-network / firewalled):**
 
@@ -493,58 +520,86 @@ multiple transports at once; that's out of scope.
 Document results in a follow-up note. The shootout is the first user-facing
 moment of truth for whether WarpStream beats NDI.
 
-## Open questions for the WarpStream author
+## Resolved questions
 
-Each has a proposed default so the spec isn't blocked. WarpStream's author
-confirms or counters.
+All nine resolved **2026-06-23** against shipped WarpStream `v0.2.0-sender`
+(`b8cf59f`) and the Plan 3 receiver design
+(`Low_Latency_UDPstreaming/docs/superpowers/specs/2026-06-23-warpstream-receiver-design.md`).
+WarpStream is the user's own SDK, so these are read off committed code/design,
+not negotiated with a third party. Citations are into the WarpStream package.
 
-**Q1. Latency reporting alignment.** *Confirmed in design discussion.* Both
-WarpStream and QuicLink commit to multi-component reporting via PTS-delta with
-clock sync. NDI is exempt — exposes end-to-end only.
+**Q1. Latency reporting alignment — CONFIRMED.** Multi-component reporting
+stands. Clock sync is implemented (`Sources/WarpStreamProtocol/ClockSync.swift`,
+three-way ping/pong → RTT + offset). The full `TransportStats` breakdown
+(`send`/`wire`/`receive`/`endToEnd`/`jitter`) is assembled **receiver-side** by
+`ReceiverStatsAggregator` (receiver design §9); the shipped sender exposes only
+`WarpStreamStats` (bitrate, RTT, jitter depth, drops), which the sender adapter
+maps into `TransportStats`. Clock-dependent fields read `nil` until sync
+converges. NDI remains end-to-end only.
 
-**Q2. Room code format.** Proposed: 6-char uppercase alphanumeric, no
-`0/O/1/I/L`. ~1.5B combinations after exclusions. Confirm.
+**Q2. Room code format — CONFIRMED (in code).** 6 chars, alphabet
+`ABCDEFGHJKMNPQRSTUVWXYZ23456789` (31 chars; excludes `0/O/1/I/L`).
+`Sources/WarpStreamProtocol/RoomCode.swift:6`. Combination count is **31⁶ ≈ 887M**
+(the earlier "~1.5B" estimate was wrong; corrected here, no design impact).
 
-**Q3. Room code lifecycle.** Proposed: auto-generated fresh on each
-`Start Broadcasting`. Sticky/operator-settable codes are a v2 feature.
-Confirm.
+**Q3. Room code lifecycle — CONFIRMED.** Auto-generated per sender instance
+(= per broadcast), sticky for that sender's lifetime
+(`WarpStreamSender.swift:50`). `WarpStreamSenderConfig` also accepts an optional
+explicit code, but operator-settable/sticky codes stay a deferred v2 feature
+(receiver design "out of scope").
 
-**Q4. Bonjour service type + TXT schema.** Proposed:
-`_warpstream._udp.local.` with TXT keys `src`, `code`, `pskfp`. Port via SRV.
-Confirm.
+**Q4. Bonjour service type + TXT schema — CHANGED.** Service type
+`_warpstream._udp.local.` and keys `src`/`code` confirmed
+(`BonjourAdvertiser.swift:27-34`). The third key is **`certfp`** (sender cert
+fingerprint, lowercase hex), **not `pskfp`** — the shipped auth model is
+ephemeral self-signed cert + SHA-256 pinning, with the room-code-derived PSK
+(HKDF-SHA256, `RoomCode.derivePSK`) as a *second* factor. This spec's contract,
+`FoundSource` usage, and discovery flow are updated above to `certfp` /
+`certFingerprint`. (Tracked as the cross-repo sync in WarpStream's `TODO.md`.)
 
-**Q5. Cross-network connection model.** *Material product decision.* When
-the receiver enters a room code for a sender on a different network, how is
-the connection actually made?
+**Q5. Cross-network connection model — RESOLVED: LAN-only v1.** No
+STUN/TURN/relay exists or is planned for v1 (receiver design §7). The
+`init?(roomCode:)` path runs a bounded Bonjour browse, matches the entered code
+against resolved TXT `code` values on the LAN, and throws "not found on this
+network" if nothing matches. **Receiver window helper text reads "Or join by
+code (same network):".** Remote access is a later plan, owned by WarpStream.
 
-- Options: STUN + hole-punching only; STUN with TURN relay fallback; LAN-only
-  (room code is convenience, not remote access).
-- This determines what the "join by code" affordance promises the operator.
-- If the answer is LAN-only for now, the Receiver window's helper text says so
-  ("Or join by code (same network):").
-- WarpStream's author owns the answer; this spec accommodates whichever path
-  is chosen.
+**Q6. Pixel + audio format — CONFIRMED.** Video delivered as NV12
+(`kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`); audio as Float32 PCM,
+48 kHz, deinterleaved per-channel with channel count + stride in the delegate
+(receiver design §6). Sender accepts any `CVPixelBuffer` (VideoToolbox converts)
+and `AVAudioPCMBuffer` float32 input.
 
-**Q6. Pixel format + audio format delivered to delegate.** Proposed:
+**Q7. Quality preset / bitrate API — CHANGED.** No `WarpStreamResolution` enum
+exists in WarpStream. The shipped API is
+`VideoConfig(codec, width, height, fps, bitrateBitsPerSecond)` with freeform ints
+(`Codec.swift:29-36`). **NDIStream owns the preset→ints mapping**: its
+Native/720p/540p + 30/60 fps pickers map to concrete `VideoConfig` values inside
+the `WarpStreamVideoSender` adapter. `WarpStreamResolution` stays an
+NDIStream-internal enum (see the adapter-mapping note under the Sender contract).
 
-- Video: NV12 (`kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`).
-- Audio: Float32 PCM, 48 kHz, deinterleaved per-channel, channel count
-  reported in delegate callback.
+**Q8. Codec — CONFIRMED.** H.264 (VideoToolbox, Main 4.1, real-time, no frame
+reordering — `Codec.swift`, `VideoEncoder.swift`) + Opus audio. HEVC/AV1
+deferred to a later shootout iteration.
 
-Confirm.
+**Q9. Smooth pacing parity — CONFIRMED.** WarpStream has no smooth-pacing
+toggle; pacing is automatic via the sender's backpressure/fanout path
+(`Sources/WarpStreamSender/fanout/`). The NDIStream smooth-pacing toggle is
+hidden when transport is `.warpStream`.
 
-**Q7. Quality preset / bitrate target API.** Proposed: `WarpStreamSender.init`
-takes `targetResolution: WarpStreamResolution` and `targetFrameRate: Int`.
-NDIStream's existing Quality and Frame Rate pickers map directly. Confirm; or
-counter-propose a target-bitrate API if WarpStream prefers continuous control.
+### Net NDIStream-side impact of the resolutions
 
-**Q8. Codec choice (informational).** Proposed: H.264 first, for parity with
-QuicLink and Intel-Mac compatibility. HEVC and AV1 are A/B candidates for a
-later shootout iteration.
-
-**Q9. Smooth pacing parity.** NDI has a smooth-pacing toggle. If WarpStream
-has no equivalent (pacing always optimal/automatic), the toggle is hidden
-when transport is `.warpStream`. Confirm.
+- Rename every `pskfp`/`pskFingerprint` reference to `certfp`/`certFingerprint`;
+  `FoundSource.pinSHA256` now carries the **cert** fingerprint. *(Done in this
+  doc; carry into code.)*
+- `WarpStreamVideoSender`/`WarpStreamVideoReceiver` adapters wrap the **real**
+  shipped/planned API (`init(config:)` + `start()`, `submit(...:pts:)`,
+  `stats(for:)`), per the adapter-mapping table — no facade added to WarpStream.
+- Receiver adapter calls `start()` after the failable init (init no longer
+  connects).
+- Drop `WarpStreamResolution` from the WarpStream-facing contract; keep it as an
+  internal preset enum that maps to `VideoConfig` ints.
+- Receiver "join by code" affordance is scoped + labeled LAN-only.
 
 ## Out of scope (explicit)
 
